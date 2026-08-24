@@ -7,6 +7,7 @@ GETs, 429 handling, and sensitive-data masking in logs. All higher-level modules
 """
 
 import logging
+import threading
 import time
 
 import requests
@@ -19,6 +20,18 @@ logger = logging.getLogger('zadara')
 _RETRYABLE_STATUS = {502, 503, 504}
 _MAX_RETRIES = 2
 _BACKOFF_BASE = 0.5
+
+# How many requests this process may have in flight toward the cloud at once.
+#
+# Views fetch their independent sources concurrently, which is a large win per
+# request — but it multiplies just as fast across requests: 24 concurrent page
+# loads at eight sources each is ~190 open sockets, and the cloud starts timing
+# out (observed). A ceiling here keeps one page fast without letting twenty
+# pages overwhelm the thing they all depend on.
+#
+# Acquired around the HTTP call only, never held while a caller waits on nested
+# work, so a `gather` inside a `gather` cannot deadlock on it.
+_gate = threading.BoundedSemaphore(getattr(settings, 'ZADARA_MAX_CONCURRENT_REQUESTS', 12))
 
 
 def _base_url() -> str:
@@ -56,9 +69,10 @@ def request(
 
     while True:
         try:
-            resp = requests.request(
-                method, url, headers=request_headers, json=json, timeout=timeout, allow_redirects=allow_redirects
-            )
+            with _gate:
+                resp = requests.request(
+                    method, url, headers=request_headers, json=json, timeout=timeout, allow_redirects=allow_redirects
+                )
         except requests.Timeout:
             raise ZadaraError('timeout', 'Zadara did not respond in time')
         except requests.RequestException as exc:

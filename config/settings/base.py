@@ -225,6 +225,11 @@ PASSWORD_RESET_URL_TEMPLATE = env(
     default=f'{FRONTEND_BASE_URL.rstrip("/")}/reset-password?secret=$secret',
 )
 ZADARA_HTTP_TIMEOUT = env.int('ZADARA_HTTP_TIMEOUT', default=15)
+
+# Ceiling on simultaneous requests from this process to the cloud. Pages fetch
+# their independent sources at once, so without a cap the fan-out multiplies
+# across concurrent users until the cloud starts timing out.
+ZADARA_MAX_CONCURRENT_REQUESTS = env.int('ZADARA_MAX_CONCURRENT_REQUESTS', default=12)
 # Service (MSP read-only) account — loaded from secrets in real environments.
 # Scoping to ZADARA_SERVICE_PROJECT yields the msp_admin (cluster-wide read) token.
 ZADARA_SERVICE_ACCOUNT = env('ZADARA_SERVICE_ACCOUNT', default='')

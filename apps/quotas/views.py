@@ -13,10 +13,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authentication import vault
+from apps.common.concurrency import gather
 from apps.common.exceptions import AppError
 from apps.integrations.zadara import resources as zadara_resources
 from apps.integrations.zadara import service as zadara_service
-from apps.integrations.zadara.exceptions import ZadaraError
 
 
 class UserQuotaView(APIView):
@@ -40,26 +40,25 @@ class UserQuotaView(APIView):
         account = (request.user.account or '').strip()
         unavailable = []
 
-        def section(name, fetch):
-            try:
-                return fetch()
-            except ZadaraError:
-                unavailable.append(name)
+        # The account's quota document needs its domain id first, so that pair
+        # stays sequential; the project's document does not depend on either and
+        # runs alongside them.
+        def account_half():
+            domain_id = zadara_service.resolve_domain_id(account) if account else None
 
-                return None
+            return zadara_resources.list_domain_quotas(token, domain_id) if domain_id else None
 
+        sources = {'account': account_half}
         if project_id:
-            project = section('project', lambda: zadara_resources.list_project_quotas(token, project_id))
+            sources['project'] = lambda: zadara_resources.list_project_quotas(token, project_id)
         else:
-            project = None
             unavailable.append('project')
 
-        domain_id = section('account', lambda: zadara_service.resolve_domain_id(account)) if account else None
-        if domain_id:
-            account_quotas = section('account', lambda: zadara_resources.list_domain_quotas(token, domain_id))
-        else:
-            account_quotas = None
-            unavailable.append('account')
+        results = gather(sources)
+
+        project = results['project'].value if 'project' in results else None
+        account_quotas = results['account'].value
+        unavailable += [name for name, result in results.items() if not result.ok or result.value is None]
 
         if project is None and account_quotas is None:
             raise AppError(message='Failed to load quotas', code='upstream_error', status_code=502)

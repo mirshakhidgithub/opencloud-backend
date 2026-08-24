@@ -23,11 +23,11 @@ from rest_framework.views import APIView
 from apps.audit.models import AuditLog
 from apps.audit.services import record
 from apps.authentication import vault
+from apps.common.concurrency import gather
 from apps.common.exceptions import AppError
 from apps.common.permissions import IsAdmin
 from apps.common.tenancy import account_domain
 from apps.integrations.zadara import resources as zadara_resources
-from apps.integrations.zadara.exceptions import ZadaraError
 
 from . import invoices as invoice_engine
 from . import rates as rate_engine
@@ -89,34 +89,35 @@ def _live_measurements(token: str, project_id: str) -> tuple[dict, list[str]]:
         'elastic_ips': 0,
         'snapshot_gib': 0,
     }
-    unavailable = []
+    # Four independent reads for one estimate — together rather than in turn.
+    results = gather(
+        {
+            'machines': lambda: zadara_resources.list_vms(token),
+            'volumes': lambda: zadara_resources.list_volumes(token),
+            'addresses': lambda: zadara_resources.list_elastic_ips(token),
+            'snapshots': lambda: zadara_resources.list_volume_snapshots(token),
+        }
+    )
+    unavailable = [name for name, result in results.items() if not result.ok]
 
-    def source(name, fetch):
-        try:
-            return fetch()
-        except ZadaraError:
-            unavailable.append(name)
+    def mine(name):
+        return [item for item in results[name].value or [] if item.get('projectId') == project_id]
 
-            return None
-
-    def mine(items):
-        return [item for item in items or [] if item.get('projectId') == project_id]
-
-    for vm in mine(source('machines', lambda: zadara_resources.list_vms(token))):
+    for vm in mine('machines'):
         values['vms_total'] += 1
         if vm['status'].lower() in RUNNING:
             values['vms_running'] += 1
             values['vcpus'] += vm['vcpus']
             values['ram_mb'] += vm['ramMB']
 
-    for volume in mine(source('volumes', lambda: zadara_resources.list_volumes(token))):
+    for volume in mine('volumes'):
         key = {'SSD': 'ssd_gib', 'HDD': 'hdd_gib'}.get(volume.get('media') or '', 'unlabelled_gib')
         values[key] += volume['sizeGiB']
 
-    for _eip in mine(source('addresses', lambda: zadara_resources.list_elastic_ips(token))):
+    for _eip in mine('addresses'):
         values['elastic_ips'] += 1
 
-    for snapshot in mine(source('snapshots', lambda: zadara_resources.list_volume_snapshots(token))):
+    for snapshot in mine('snapshots'):
         values['snapshot_gib'] += snapshot['sizeGiB']
 
     return values, unavailable

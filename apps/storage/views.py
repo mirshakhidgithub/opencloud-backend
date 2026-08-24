@@ -5,9 +5,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authentication import vault
+from apps.common.concurrency import gather
 from apps.common.exceptions import AppError
 from apps.integrations.zadara import resources as zadara_resources
-from apps.integrations.zadara.exceptions import ZadaraError
 
 
 class VolumeListView(APIView):
@@ -27,21 +27,28 @@ class VolumeListView(APIView):
         if not token:
             raise AppError(message='Session expired, please sign in again.', code='session_expired', status_code=401)
 
-        try:
-            volumes = zadara_resources.list_volumes(token)
-        except ZadaraError as err:
-            if err.code == 'forbidden':
+        # The machine names are only a column, but fetching them after the
+        # volumes cost a whole extra round-trip — so both go at once. A volume
+        # list without machine names still beats an error.
+        results = gather(
+            {
+                'volumes': lambda: zadara_resources.list_volumes(token),
+                'machines': lambda: zadara_resources.list_vms(token),
+            }
+        )
+
+        if not results['volumes'].ok:
+            code = getattr(results['volumes'].error, 'code', 'upstream_error')
+            if code == 'forbidden':
                 raise AppError(
                     message='Your account cannot list volumes in this project.',
                     code='forbidden',
                     status_code=403,
                 )
-            raise AppError(message='Failed to load volumes', code=err.code, status_code=502)
+            raise AppError(message='Failed to load volumes', code=code, status_code=502)
 
-        try:
-            names = {vm['id']: vm['name'] for vm in zadara_resources.list_vms(token)}
-        except ZadaraError:
-            names = {}  # a volume list without machine names still beats an error
+        volumes = results['volumes'].value
+        names = {vm['id']: vm['name'] for vm in results['machines'].value or []}
 
         for volume in volumes:
             volume['attachedToName'] = names.get(volume['attachedToId'] or '', '')
@@ -80,14 +87,23 @@ class SnapshotListView(APIView):
         if not token:
             raise AppError(message='Session expired, please sign in again.', code='session_expired', status_code=401)
 
-        def safe(fetch):
-            try:
-                return fetch(), None
-            except ZadaraError as err:
-                return [], err.code
+        # Both snapshot kinds and the volumes that name them: three unrelated
+        # reads, so one wave instead of three.
+        results = gather(
+            {
+                'volumes': lambda: zadara_resources.list_volume_snapshots(token),
+                'machines': lambda: zadara_resources.list_vm_snapshots(token),
+                'sources': lambda: zadara_resources.list_volumes(token),
+            }
+        )
 
-        volume_snapshots, volume_error = safe(lambda: zadara_resources.list_volume_snapshots(token))
-        vm_snapshots, vm_error = safe(lambda: zadara_resources.list_vm_snapshots(token))
+        def code_of(name):
+            return None if results[name].ok else getattr(results[name].error, 'code', 'upstream_error')
+
+        volume_snapshots = results['volumes'].value or []
+        vm_snapshots = results['machines'].value or []
+        volume_error = code_of('volumes')
+        vm_error = code_of('machines')
 
         if volume_error and vm_error:
             raise AppError(message='Failed to load snapshots', code=volume_error, status_code=502)
@@ -96,10 +112,7 @@ class SnapshotListView(APIView):
         # volume still exists — snapshots outlive their source. A snapshot
         # carries no volume type of its own, so the medium is inherited from
         # that source and stays blank once the source is gone.
-        try:
-            sources = {v['id']: v for v in zadara_resources.list_volumes(token)}
-        except ZadaraError:
-            sources = {}
+        sources = {v['id']: v for v in results['sources'].value or []}
 
         for snapshot in volume_snapshots:
             source = sources.get(snapshot['sourceVolumeId'] or '')

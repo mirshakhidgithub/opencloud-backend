@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authentication import vault
+from apps.common.concurrency import gather
 from apps.common.exceptions import AppError
 from apps.integrations.zadara import resources as zadara_resources
 from apps.integrations.zadara.exceptions import ZadaraError
@@ -30,17 +31,20 @@ class DashboardView(APIView):
             raise AppError(message='Session expired, please sign in again.', code='session_expired', status_code=401)
 
         summary = {}
-        unavailable = []
 
-        def section(name, fetch):
-            try:
-                return fetch()
-            except ZadaraError:
-                unavailable.append(name)
+        # Four unrelated reads: fetched together, since the page cannot render
+        # until the slowest of them lands either way.
+        results = gather(
+            {
+                'vms': lambda: zadara_resources.list_vms(token),
+                'storage': lambda: zadara_resources.list_volumes(token),
+                'networks': lambda: zadara_resources.list_vpcs(token),
+                'alarms': lambda: zadara_resources.list_alarms(token),
+            }
+        )
+        unavailable = [name for name, result in results.items() if not result.ok]
 
-                return None
-
-        vms = section('vms', lambda: zadara_resources.list_vms(token))
+        vms = results['vms'].value
         summary['vms'] = (
             {
                 'total': len(vms),
@@ -53,7 +57,7 @@ class DashboardView(APIView):
             else None
         )
 
-        volumes = section('storage', lambda: zadara_resources.list_volumes(token))
+        volumes = results['storage'].value
         summary['storage'] = (
             {
                 'volumes': len(volumes),
@@ -65,10 +69,10 @@ class DashboardView(APIView):
             else None
         )
 
-        vpcs = section('networks', lambda: zadara_resources.list_vpcs(token))
+        vpcs = results['networks'].value
         summary['networks'] = {'vpcs': len(vpcs)} if vpcs is not None else None
 
-        alarms = section('alarms', lambda: zadara_resources.list_alarms(token))
+        alarms = results['alarms'].value
         summary['alarms'] = (
             {
                 'open': sum(1 for a in alarms if a['state'] != 'closed'),

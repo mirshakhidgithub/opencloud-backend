@@ -20,6 +20,8 @@ from urllib.parse import urlencode, urlsplit
 from django.conf import settings
 from django.core.cache import cache
 
+from apps.common.concurrency import gather
+
 from .exceptions import ZadaraError
 from .http import request
 
@@ -132,17 +134,36 @@ def list_vms(token: str, *, with_disks: bool = False) -> list[dict]:
     `with_disks` joins the volume list so each machine can report the storage it
     actually uses and the medium under it. Off by default: it costs one more
     upstream request, which a caller that fetches volumes anyway should not pay.
+
+    The machine list, the addresses and (when asked) the volumes are three
+    independent reads, so they are fetched at the same time — a machine table was
+    otherwise waiting out two or three round-trips in a row for data that never
+    depended on each other.
     """
-    data = _authed_get(VMS_PATH, token)
+    sources = {
+        'vms': lambda: _authed_get(VMS_PATH, token),
+        'eips': lambda: _public_ips_by_instance(token),
+    }
+    if with_disks:
+        sources['volumes'] = lambda: _safe_volumes(token)
+
+    fetched = gather(sources)
+
+    # Only the machine list itself is worth failing over; the other two already
+    # degrade to nothing on their own.
+    if not fetched['vms'].ok:
+        raise fetched['vms'].error
+
+    data = fetched['vms'].value
     items = data if isinstance(data, list) else (data or {}).get('vms', [])
     vms = [normalize_vm(v) for v in items]
 
-    public = _public_ips_by_instance(token)
+    public = fetched['eips'].value or {}
     for vm in vms:
         vm['publicIps'] = public.get(vm['id'], [])
 
     if with_disks:
-        summarise_vm_disks(vms, _safe_volumes(token))
+        summarise_vm_disks(vms, fetched['volumes'].value)
 
     return vms
 
