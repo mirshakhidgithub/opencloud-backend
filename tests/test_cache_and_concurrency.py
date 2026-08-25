@@ -154,3 +154,55 @@ def test_results_are_keyed_by_name_not_by_order():
     results = gather({'first': lambda: 1, 'second': lambda: 2, 'third': lambda: 3})
 
     assert {name: r.value for name, r in results.items()} == {'first': 1, 'second': 2, 'third': 3}
+
+
+# --- the service-mode directory -------------------------------------------
+
+
+@pytest.fixture
+def counting_svc(monkeypatch):
+    from apps.integrations.zadara import service
+
+    calls = []
+
+    def fake(path):
+        calls.append(path)
+
+        return [{'id': 'dom-1', 'name': 'Acme'}]
+
+    monkeypatch.setattr(service, '_svc_get', fake)
+
+    return calls
+
+
+def test_the_account_directory_is_cached(counting_svc):
+    from apps.integrations.zadara import service
+
+    service.list_domains()
+    service.list_domains()
+
+    assert len(counting_svc) == 1, 'accounts change when an operator adds one, not per request'
+
+
+def test_user_lists_are_never_cached(counting_svc):
+    """An administrator who has just created someone must see them immediately.
+
+    Those writes go out with the admin's own token, so this scope would never
+    learn to expire — the only safe answer is not to cache it at all.
+    """
+    from apps.integrations.zadara import service
+
+    service.list_domain_users('dom-1')
+    service.list_domain_users('dom-1')
+
+    assert len(counting_svc) == 2
+
+
+def test_project_lists_are_cached_per_domain(counting_svc):
+    from apps.integrations.zadara import service
+
+    service.list_domain_projects('dom-1')
+    service.list_domain_projects('dom-1')
+    service.list_domain_projects('dom-2')
+
+    assert len(counting_svc) == 2, 'one fetch per domain, then served from cache'

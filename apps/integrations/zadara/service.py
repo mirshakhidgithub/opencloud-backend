@@ -10,10 +10,12 @@ The service token is cached (short TTL) and refreshed automatically. It never
 leaves the server. Every caller must still enforce the requesting user's role.
 """
 
+import hashlib
 import logging
 import time
 
 from django.conf import settings
+from django.core.cache import cache
 
 from . import auth as zauth
 from .exceptions import ZadaraError
@@ -59,9 +61,36 @@ def _svc_get(path: str):
         return None
 
 
+# The account and project directory changes when an operator adds one, which is
+# rare and never something the cabinet does — it has no create-account or
+# create-project path. So it is cached for minutes rather than seconds.
+#
+# User lists are deliberately NOT cached: an administrator who has just created
+# someone must see them, and those writes go out with the admin's own token, so
+# this scope would not know to expire.
+DIRECTORY_CACHE_TTL = 300
+
+_DIRECTORY_PREFIX = 'zadara:svc'
+
+
+def _svc_get_cached(path: str, ttl: int = DIRECTORY_CACHE_TTL):
+    """`_svc_get` for near-static directory reads. One scope: the service token."""
+    key = f'{_DIRECTORY_PREFIX}:{hashlib.sha256(path.encode()).hexdigest()[:16]}'
+
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+
+    data = _svc_get(path)
+    if data is not None:
+        cache.set(key, data, ttl)
+
+    return data
+
+
 def list_domains() -> list[dict]:
     """Every account on the cluster, as {id, name}. Service mode only."""
-    data = _svc_get('/api/v2/identity/domains')
+    data = _svc_get_cached('/api/v2/identity/domains')
     items = data if isinstance(data, list) else (data or {}).get('domains', [])
 
     return [{'id': str(d['id']), 'name': d.get('name', '')} for d in items if d.get('id')]
@@ -69,7 +98,7 @@ def list_domains() -> list[dict]:
 
 def resolve_domain_id(account_name: str) -> str | None:
     # This deployment rejects ?name= filters on /domains; list and match locally.
-    data = _svc_get('/api/v2/identity/domains')
+    data = _svc_get_cached('/api/v2/identity/domains')
     items = data if isinstance(data, list) else (data or {}).get('domains', [])
     for d in items:
         if str(d.get('name', '')).lower() == account_name.lower():
@@ -110,7 +139,7 @@ def get_user_project_ids(user_id: str) -> list[str]:
 
 def list_domain_projects(domain_id: str) -> dict[str, str]:
     """Map project_id -> name for a domain (to label discovered project ids)."""
-    data = _svc_get(f'/api/v2/identity/projects?domain_id={domain_id}')
+    data = _svc_get_cached(f'/api/v2/identity/projects?domain_id={domain_id}')
     items = data if isinstance(data, list) else (data or {}).get('projects', [])
     return {str(p['id']): p.get('name', '') for p in items if p.get('id')}
 
@@ -153,7 +182,7 @@ def list_domain_users(domain_id: str) -> list[dict]:
 
 def list_domain_project_details(domain_id: str) -> list[dict]:
     """Projects of one account, with the fields a tenant list wants."""
-    data = _svc_get(f'/api/v2/identity/projects?domain_id={domain_id}')
+    data = _svc_get_cached(f'/api/v2/identity/projects?domain_id={domain_id}')
     items = data if isinstance(data, list) else (data or {}).get('projects', [])
 
     return [
