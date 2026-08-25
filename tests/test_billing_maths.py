@@ -156,3 +156,36 @@ def test_vat_extracted_when_prices_already_include_it(settings):
     assert subtotal == Decimal('1000.00')
     assert vat == Decimal('120.00')
     assert subtotal + vat == total
+
+
+# --- the estimate is read the same way as a bill ---------------------------
+
+
+@pytest.mark.django_db
+def test_the_estimate_rows_multiply_out_and_sum_to_its_total(tariff):
+    """The Bill tab's estimate is a table people check with a calculator.
+
+    It used to multiply the unrounded quantity while showing the rounded one, and
+    to sum unrounded costs, so a row did not multiply out and the total was not
+    the sum of the rows. RAM is the case that exposes it: 1536 MB is 1.5 GB
+    exactly, 1500 MB is 1.4648…
+    """
+    rate_map = rate_engine.rate_map(tariff)
+    estimate = rate_engine.estimate_month({**SHAPE, 'ram_mb': 1500}, rate_map)
+
+    for line in estimate['lines']:
+        expected = round(line['quantity'] * line['unitPrice'], 2)
+        assert line['cost'] == pytest.approx(expected, abs=0.001), f'{line["resource"]} does not multiply out'
+
+    assert estimate['total'] == pytest.approx(sum(line['cost'] for line in estimate['lines']), abs=0.001)
+
+
+@pytest.mark.django_db
+def test_the_estimate_agrees_with_a_month_of_that_shape(tariff):
+    """Estimate and bill must not drift: the same shape, the same money."""
+    rate_map = rate_engine.rate_map(tariff)
+    estimate = rate_engine.estimate_month(SHAPE, rate_map)
+    fill_month(2026, 6, 30)
+    billed = rate_engine.cost_of(list(UsageSnapshot.objects.all()), rate_map)
+
+    assert estimate['total'] == pytest.approx(billed['total'], abs=0.01) == pytest.approx(EXPECTED_MONTH, abs=0.01)

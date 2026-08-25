@@ -243,6 +243,16 @@ ZADARA_SERVICE_PROJECT = env('ZADARA_SERVICE_PROJECT', default='')
 # Fernet key used to encrypt cached Zadara tokens at rest (token vault).
 TOKEN_VAULT_KEY = env('TOKEN_VAULT_KEY', default='')
 
+# How long a vaulted Zadara token is kept. The cloud's tokens live ~4h and
+# cannot be refreshed without the password, so this sits just under that.
+ZADARA_TOKEN_TTL = env.int('ZADARA_TOKEN_TTL', default=3 * 60 * 60)
+
+# The Django session must not outlive the cloud token it depends on. Django's
+# default is two weeks: the session cookie stayed valid long after the token in
+# the vault had gone, so the guards let the dashboard render while every request
+# on it failed. One number for both, and the user is asked to sign in instead.
+SESSION_COOKIE_AGE = ZADARA_TOKEN_TTL
+
 # --------------------------------------------------------------------------- #
 # I18N / static
 # --------------------------------------------------------------------------- #

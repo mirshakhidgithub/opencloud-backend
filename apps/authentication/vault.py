@@ -13,7 +13,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.core.cache import cache
 
-# Keep vault entries a bit under Zadara's ~4h token lifetime.
+# Kept a bit under Zadara's ~4h token lifetime, and shared with SESSION_COOKIE_AGE
+# so the session and the token it depends on expire together.
 DEFAULT_TTL_SECONDS = 3 * 60 * 60
 
 _KEY_PREFIX = 'zadara_token:'
@@ -29,9 +30,13 @@ def fernet() -> Fernet:
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
-def store(session_key: str, token: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
+def ttl_seconds() -> int:
+    return getattr(settings, 'ZADARA_TOKEN_TTL', DEFAULT_TTL_SECONDS)
+
+
+def store(session_key: str, token: str, ttl: int | None = None) -> None:
     encrypted = fernet().encrypt(token.encode()).decode()
-    cache.set(f'{_KEY_PREFIX}{session_key}', encrypted, timeout=ttl)
+    cache.set(f'{_KEY_PREFIX}{session_key}', encrypted, timeout=ttl or ttl_seconds())
 
 
 def get(session_key: str) -> str | None:

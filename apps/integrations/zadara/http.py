@@ -9,6 +9,8 @@ GETs, 429 handling, and sensitive-data masking in logs. All higher-level modules
 import logging
 import threading
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import requests
 from django.conf import settings
@@ -32,6 +34,35 @@ _BACKOFF_BASE = 0.5
 # Acquired around the HTTP call only, never held while a caller waits on nested
 # work, so a `gather` inside a `gather` cannot deadlock on it.
 _gate = threading.BoundedSemaphore(getattr(settings, 'ZADARA_MAX_CONCURRENT_REQUESTS', 12))
+
+
+def _retry_after(resp: requests.Response, default: float) -> float:
+    """Seconds to wait, from a Retry-After header.
+
+    The header is allowed to be an HTTP-date rather than a number of seconds
+    (RFC 9110), and float() on a date raises — turning a rate-limit answer into
+    a 500 from our own client. Anything unparseable falls back to the backoff.
+    """
+    raw = (resp.headers.get('Retry-After') or '').strip()
+    if not raw:
+        return default
+
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return default
+
+    if when is None:
+        return default
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 def _base_url() -> str:
@@ -86,8 +117,7 @@ def request(
 
         # Respect rate limiting.
         if resp.status_code == 429 and attempt < _MAX_RETRIES:
-            retry_after = float(resp.headers.get('Retry-After', _BACKOFF_BASE * (2**attempt)))
-            time.sleep(min(retry_after, 5))
+            time.sleep(min(_retry_after(resp, _BACKOFF_BASE * (2**attempt)), 5))
             attempt += 1
             continue
 

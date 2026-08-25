@@ -30,9 +30,13 @@ logger = logging.getLogger('zadara')
 
 
 def _authed_get(path: str, token: str):
+    # A 401 here means the vaulted token died (they live ~4h and cannot be
+    # refreshed), not that someone mistyped a password: `session_expired` is what
+    # the browser needs in order to send the user to sign in again, and
+    # `invalid_credentials` is reserved for the sign-in form.
     resp = request('GET', path, token=token)
     if resp.status_code == 401:
-        raise ZadaraError('invalid_credentials', 'Session token is invalid or expired', 401)
+        raise ZadaraError('session_expired', 'Your session with the cloud has expired, please sign in again.', 401)
     if resp.status_code == 403:
         raise ZadaraError('forbidden', 'You are not authorized to view this resource', 403)
     if not resp.ok:
@@ -113,7 +117,7 @@ VM_ACTIONS = ('start', 'stop', 'reboot')
 def _authed_post(path: str, token: str, json: dict | None = None):
     resp = request('POST', path, token=token, json=json)
     if resp.status_code == 401:
-        raise ZadaraError('invalid_credentials', 'Session token is invalid or expired', 401)
+        raise ZadaraError('session_expired', 'Your session with the cloud has expired, please sign in again.', 401)
     if resp.status_code == 403:
         raise ZadaraError('forbidden', 'You are not authorized to perform this action', 403)
     if resp.status_code == 404:
@@ -280,7 +284,7 @@ def get_vm(token: str, vm_id: str) -> dict:
     if resp.status_code == 403:
         raise ZadaraError('forbidden', 'You are not authorized to view this machine', 403)
     if resp.status_code == 401:
-        raise ZadaraError('invalid_credentials', 'Session token is invalid or expired', 401)
+        raise ZadaraError('session_expired', 'Your session with the cloud has expired, please sign in again.', 401)
     if not resp.ok:
         raise ZadaraError('upstream_error', f'Zadara returned status {resp.status_code}', resp.status_code)
 
@@ -353,7 +357,7 @@ def get_vm_console(token: str, vm_id: str) -> dict:
     if resp.status_code == 403:
         raise ZadaraError('console_forbidden', 'Console access is not allowed for this machine', 403)
     if resp.status_code == 401:
-        raise ZadaraError('invalid_credentials', 'Session token is invalid or expired', 401)
+        raise ZadaraError('session_expired', 'Your session with the cloud has expired, please sign in again.', 401)
     if not (resp.ok or resp.is_redirect):
         raise ZadaraError('upstream_error', f'Zadara returned status {resp.status_code}', resp.status_code)
 

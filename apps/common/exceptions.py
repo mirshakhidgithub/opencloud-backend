@@ -81,9 +81,19 @@ def envelope_exception_handler(exc, context):
     if isinstance(exc, AppError) and exc.details:
         details = exc.details
 
+    code = _code_for(exc, response)
+
+    # An expired session is 401 wherever it surfaces. Views map most upstream
+    # failures to 502, and one of them mapped this one too — which reads to the
+    # browser as "the cloud is broken" instead of "sign in again", so the console
+    # kept rendering pages whose every request failed. Enforced here because it
+    # is a property of the condition, not of the view that happened to catch it.
+    if code == 'session_expired':
+        response.status_code = status.HTTP_401_UNAUTHORIZED
+
     response.data = {
         'error': {
-            'code': _code_for(exc, response),
+            'code': code,
             'message': str(message),
             'details': details,
         }

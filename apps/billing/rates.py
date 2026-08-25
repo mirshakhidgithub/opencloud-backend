@@ -119,18 +119,23 @@ def estimate_month(measurements: dict, rates: dict[str, Decimal]) -> dict:
         if not quantity:
             continue
 
+        # Round the quantity BEFORE multiplying, and sum the rounded costs — the
+        # same order as a billed month. Multiplying the unrounded quantity while
+        # showing the rounded one gave rows that did not multiply out, and adding
+        # unrounded costs gave a total that was not the sum of the rows shown.
+        held = quantity.quantize(_CENT, ROUND_HALF_UP)
         monthly = rates.get(resource, Decimal(0))
-        cost = quantity * monthly
+        cost = _money(held * monthly)
         total += cost
         lines.append(
             {
                 'resource': resource,
                 'label': Resource(resource).label,
-                'quantity': float(quantity.quantize(_CENT, ROUND_HALF_UP)),
+                'quantity': float(held),
                 'unitPrice': float(monthly),
-                'cost': float(cost.quantize(_CENT, ROUND_HALF_UP)),
+                'cost': float(cost),
                 'priced': resource in rates,
             }
         )
 
-    return {'lines': lines, 'total': float(total.quantize(_CENT, ROUND_HALF_UP)), 'days': 0}
+    return {'lines': lines, 'total': float(total), 'days': 0}

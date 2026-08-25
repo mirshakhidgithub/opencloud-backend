@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from apps.common import concurrency
 from apps.common.concurrency import gather
 from apps.integrations.zadara import resources
 
@@ -206,3 +207,65 @@ def test_project_lists_are_cached_per_domain(counting_svc):
     service.list_domain_projects('dom-2')
 
     assert len(counting_svc) == 2, 'one fetch per domain, then served from cache'
+
+
+# --- a single source must not cost the caller its database connection ------
+#
+# Asserted on the call itself rather than by watching a connection die, because
+# the test database is in-memory sqlite and its `close()` is deliberately a
+# no-op — the real consequence (a request whose connection is pulled away, and
+# inside a transaction an atomic block poisoned for every later query) cannot be
+# reproduced on this backend. What is testable is the decision: close in pool
+# threads, never on the thread that called us.
+
+
+class RecordingConnections:
+    """Stands in for django.db.connections, remembering who closed what."""
+
+    def __init__(self):
+        self.closed_by = []
+
+    def close_all(self):
+        self.closed_by.append(threading.current_thread().name)
+
+
+def test_the_inline_path_does_not_close_the_caller_s_connections(monkeypatch):
+    """One source runs inline, on the REQUEST thread. Closing there throws away
+    the connection the request is using."""
+    recorder = RecordingConnections()
+    monkeypatch.setattr(concurrency, 'connections', recorder)
+
+    result = gather({'only': lambda: 'value'})
+
+    assert result['only'].value == 'value'
+    assert recorder.closed_by == [], 'the caller\'s own connection must survive its own gather'
+
+
+def test_worker_threads_close_their_own_connections(monkeypatch):
+    """The reason the close exists: Django connections are thread-local and are
+    tidied up only on the request thread, so a pool thread that touched the ORM
+    leaks one — and those accumulate until the database refuses new ones."""
+    recorder = RecordingConnections()
+    monkeypatch.setattr(concurrency, 'connections', recorder)
+    here = threading.current_thread().name
+
+    results = gather({f'source-{i}': (lambda i=i: i) for i in range(3)})
+
+    assert sorted(r.value for r in results.values()) == [0, 1, 2]
+    assert len(recorder.closed_by) == 3, 'every worker must clean up after itself'
+    assert here not in recorder.closed_by
+
+
+def test_a_failing_source_still_closes_its_thread(monkeypatch):
+    """The leak would be worst on the error path, which is where it is easiest
+    to forget."""
+    recorder = RecordingConnections()
+    monkeypatch.setattr(concurrency, 'connections', recorder)
+
+    def boom():
+        raise RuntimeError('refused')
+
+    results = gather({'ok': lambda: 1, 'boom': boom})
+
+    assert results['ok'].ok and not results['boom'].ok
+    assert len(recorder.closed_by) == 2

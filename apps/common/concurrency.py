@@ -50,7 +50,7 @@ class Fetched:
         return self.error is None
 
 
-def _run(name: str, fetch: Callable[[], Any]) -> Fetched:
+def _run(name: str, fetch: Callable[[], Any], *, in_worker: bool = True) -> Fetched:
     try:
         return Fetched(value=fetch())
     except BaseException as error:  # noqa: BLE001 — the point is to not lose the others
@@ -58,8 +58,12 @@ def _run(name: str, fetch: Callable[[], Any]) -> Fetched:
 
         return Fetched(error=error)
     finally:
-        # Thread-local, so this closes only what this task opened.
-        connections.close_all()
+        # Only in a pool thread. `connections.close_all()` is thread-local, and
+        # the single-source path runs inline on the REQUEST thread — closing
+        # there would throw away the connection the request is using, and inside
+        # a transaction it poisons the atomic block outright.
+        if in_worker:
+            connections.close_all()
 
 
 def gather(sources: dict[str, Callable[[], Any]]) -> dict[str, Fetched]:
@@ -74,7 +78,7 @@ def gather(sources: dict[str, Callable[[], Any]]) -> dict[str, Fetched]:
     if len(sources) == 1:
         name, fetch = next(iter(sources.items()))
 
-        return {name: _run(name, fetch)}
+        return {name: _run(name, fetch, in_worker=False)}
 
     with ThreadPoolExecutor(max_workers=min(len(sources), MAX_WORKERS)) as pool:
         futures = {name: pool.submit(_run, name, fetch) for name, fetch in sources.items()}
