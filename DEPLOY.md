@@ -129,12 +129,17 @@ two needs `up -d --build`, not a restart.
 
 TLS is the existing `*.opencloud.uz` wildcard — nothing to issue, nothing to
 renew, and the site file already points at where this host keeps it
-(`/etc/letsencrypt/live/opencloud.uz/`), so it is copied as-is.
+(`/etc/ssl/opencloud.crt` + `.key`), so it is copied as-is.
 
 ```bash
 sudo cp deploy/nginx/cabinet.opencloud.uz.conf /etc/nginx/sites-available/
 sudo ln -s /etc/nginx/sites-available/cabinet.opencloud.uz.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
+
+# The chain, not just the leaf: nginx sends only what this file contains.
+grep -c 'BEGIN CERTIFICATE' /etc/ssl/opencloud.crt        # more than 1
+openssl s_client -connect cabinet.opencloud.uz:443 -servername cabinet.opencloud.uz \
+  </dev/null 2>/dev/null | grep -E 'Verify return code'   # 0 (ok)
 ```
 
 `X-Forwarded-Proto` is not optional. nginx owns the http→https redirect (the
