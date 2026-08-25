@@ -62,6 +62,20 @@ Open upstream blockers: quota **writes** and creating security-group **rules**
 (both refused by the cloud's gateway for a tenant-admin token; each needs a HAR
 capture from the native console).
 
+## Prices
+
+The platform price list (per unit per month, UZS) lives in
+`apps/billing/management/commands/ensure_default_tariff.py` and is applied on
+every start of the web container — but only when the tariff table is empty, so it
+can never overwrite a price set on purpose. Deliberately not a data migration:
+prices would then seed the test database and quietly become the baseline every
+billing test is measured against.
+
+Without any tariff, usage is still measured and simply charged at nothing — the
+bill comes out lower than the usage behind it and only a warning says so. That is
+why this is automatic rather than a step to remember. `set_tariff` changes prices
+afterwards, or gives one account its own list.
+
 ## Security notes
 - Production settings refuse to start on a development secret key, a missing
   `TOKEN_VAULT_KEY`, a per-process cache or sqlite — each of those fails quietly

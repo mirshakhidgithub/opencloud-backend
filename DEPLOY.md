@@ -192,7 +192,12 @@ vault and Redis are all working together.
 - **Seller requisites.** `BILLING_SELLER_{NAME,INN,ADDRESS,ACCOUNT}` must be
   filled or the API refuses to issue an invoice (`requisites_incomplete`). VAT is
   off (`BILLING_VAT_RATE=0`) unless the invoice has to carry tax.
-- **Tariffs.** An empty price list produces documents with zeroes:
+- **Tariffs.** Applied automatically: the web container runs
+  `ensure_default_tariff` on every start, which creates the platform price list
+  if — and only if — no tariff exists at all. An installation therefore never
+  measures usage it charges nothing for, which is the one mistake that cannot be
+  repaired later: an invoiced month cannot be re-priced. To change prices
+  afterwards, or to give one account its own list:
   `docker compose -f docker-compose.prod.yml exec web python manage.py set_tariff --help`
 - **The daily snapshot.** It is the only source of billing history and a missed
   day can never be recovered. Take one immediately so today is measured rather

@@ -39,6 +39,7 @@ USER opencloud
 EXPOSE 8000
 
 # Migrations run here rather than in a separate step so a deploy cannot start a
-# process against a schema it does not match. Compose gives the worker and beat
-# their own commands.
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60 --access-logfile - --error-logfile -"]
+# process against a schema it does not match. `ensure_default_tariff` is here for
+# the same reason: an installation with no prices measures usage and charges
+# nothing for it, and an invoiced month cannot be re-priced afterwards.
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py ensure_default_tariff && exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60 --access-logfile - --error-logfile -"]
