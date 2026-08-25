@@ -9,3 +9,7 @@ redis==5.2.1
 gunicorn==23.0.0
 cryptography==44.0.1
 requests==2.32.3
+
+# Tests
+pytest==8.3.4
+pytest-django==4.9.0

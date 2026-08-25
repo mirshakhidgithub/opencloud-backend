@@ -96,3 +96,37 @@ Prices are per unit per **month** and a period is charged in full; set them with
 `manage.py set_tariff --price vcpu=46000 --price ssd_gb=1900 …` (omit
 `--account` for the platform default, which the cabinet deliberately cannot
 edit).
+
+## Tests
+
+```bash
+pytest
+```
+
+Hermetic: an in-memory database and cache, and nothing reaches the cloud —
+anything that would is patched at the `apps.integrations.zadara` boundary, not
+at the `requests` level, so a change in our own client cannot slip through a
+green run.
+
+What they cover, and why those things:
+
+- **The account boundary.** It has broken once — `resolve_app_role` matched admin
+  hints as substrings, so an ordinary `tenant_admin` became ADMIN and
+  `/admin/resources` served 155 machines across 21 unrelated companies. Tested
+  from the outside, through HTTP, because the boundary is a property of the
+  response.
+- **Cache tenant isolation.** The response cache is keyed on the token, not the
+  path; a path-only key would hand one customer another's machine list.
+- **Billing arithmetic.** A full month costs exactly the quoted price in a 28-,
+  29-, 30- or 31-day month; every row multiplies out; VAT is added or extracted
+  according to configuration, never guessed.
+- **Invoice freezing.** An issued document must not move when a price is
+  corrected, and re-issuing must return the original rather than rebuild it.
+- **The concurrent fetcher.** One refusal must not take the other sources with
+  it, and the sources must genuinely run at the same time.
+
+The suite was checked by mutation: the substring-role bug, a path-only cache key,
+a missing account filter and a flat ÷30 in the billing maths were each
+reintroduced and each turned the suite red. One mutation — recreating an issued
+invoice instead of returning it — passed at first, which is why
+`test_reissuing_after_a_price_change_returns_the_original_figures` exists.
