@@ -4,8 +4,9 @@ Django + DRF application API over Zadara zCompute. PostgreSQL for app data,
 Redis for cache + Celery broker, Celery for background sync. See
 [`../backend-plan.md`](../backend-plan.md) for the full design.
 
-Status: **M0 — infrastructure skeleton.** No business logic yet; `common`
-provides the response envelope, error handler, RBAC base, health and OpenAPI.
+Status: **complete through M6** — auth + RBAC, projects, compute, storage,
+networking, monitoring, quotas, the admin surface, and billing with issued
+invoices. Deployment: see [`DEPLOY.md`](DEPLOY.md).
 
 ## Contract (must match the frontend)
 - Base path `/api/v1/*`
@@ -13,8 +14,13 @@ provides the response envelope, error handler, RBAC base, health and OpenAPI.
 - Auth: httpOnly cookie; Zadara tokens live server-side only (never in the browser).
 
 ## Run with Docker (Postgres + Redis + Celery)
+`docker-compose.yml` is the **local** stack: it brings its own Postgres and Redis
+and publishes them on loopback so `manage.py` on the host can use the same ones.
+The server stack is `docker-compose.prod.yml` — see [`DEPLOY.md`](DEPLOY.md).
+
 ```bash
-cp .env.example .env
+cp .env.example .env      # set DJANGO_SECRET_KEY and TOKEN_VAULT_KEY: prod
+                          # settings refuse to start on the defaults
 docker compose up --build
 # API:     http://localhost:8000/api/v1/health
 # Swagger: http://localhost:8000/api/v1/docs
@@ -28,24 +34,38 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-## Endpoints (M0)
+## Endpoints
+Everything lives under `/api/v1/`: `auth/*`, `user/*` (projects, compute,
+storage, networking, monitoring, quotas, billing) and `admin/*`. The full list is
+the schema itself:
 - `GET /api/v1/health` — liveness + DB check
 - `GET /api/v1/schema` — OpenAPI schema
 - `GET /api/v1/docs` — Swagger UI
+
+Django's own admin is at `/django-admin/`, not `/admin/`: the console owns
+`/admin/*` on the same origin, and nginx does not proxy it.
 
 ## Layout
 ```
 config/            settings (base/dev/prod), urls, celery, wsgi/asgi
 apps/common/       envelope renderer, exception handler, pagination, permissions, health
-apps/*             empty apps (accounts, authentication, tenants, compute, …) filled per milestone
-apps/integrations/zadara/   Zadara client (user + service modes) — added in M1/M2
+apps/*             accounts, authentication, tenants, dashboard, compute, storage,
+                   networking, monitoring, quotas, billing, audit, admin_api
+apps/integrations/zadara/   Zadara client (user + service modes)
+deploy/nginx/      host nginx site for cabinet.opencloud.uz
 ```
 
 ## Milestones
-M0 infra · **M1 auth+RBAC** · M2 compute+projects · M3 service mode+admin ·
-M4 cache/sync · M5 storage/net/monitoring · M6 quotas/billing.
+M0 infra · M1 auth+RBAC · M2 compute+projects · M3 service mode+admin ·
+M4 cache/sync · M5 storage/net/monitoring · M6 quotas/billing — all done.
+Open upstream blockers: quota **writes** and creating security-group **rules**
+(both refused by the cloud's gateway for a tenant-admin token; each needs a HAR
+capture from the native console).
 
 ## Security notes
+- Production settings refuse to start on a development secret key, a missing
+  `TOKEN_VAULT_KEY`, a per-process cache or sqlite — each of those fails quietly
+  rather than loudly, which is why the check is up front.
 - Service (cloud-admin) Zadara account creds come from a secrets manager, not git.
 - Cached tokens are encrypted at rest (Fernet, `TOKEN_VAULT_KEY`).
 - Authorization is enforced per request by the user's role, regardless of the

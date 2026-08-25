@@ -1,0 +1,113 @@
+# Production stack for the backend. Postgres and nginx already run on the host,
+# so neither is here: the app services reach the database over the docker
+# gateway, and TLS terminates in the host's nginx (see deploy/nginx/).
+#
+#   docker network create opencloud     # once, shared with the frontend compose
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Configuration lives in .env on the server (template: .env.example).
+
+name: opencloud-backend
+
+services:
+  # Holds the Zadara token vault, the MFA tickets and the response cache, and is
+  # also the Celery broker. It is persisted on purpose: losing it signs every
+  # user out and drops anything queued.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # No maxmemory, therefore no eviction — a cache entry evicted here is not a
+    # slow page, it is a logged-out user.
+    command: ['redis-server', '--save', '300', '10', '--appendonly', 'no']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      # The vault and MFA tickets live in the cache; a per-process one would log
+      # people out at random across gunicorn workers. Production settings refuse
+      # to start without it, and it is set here so .env cannot get it wrong.
+      USE_REDIS_CACHE: 'true'
+      # The http->https redirect belongs at the edge, and nginx already does it.
+      # Inside here it only breaks things: this port is loopback/docker-only, so
+      # every internal call (the console's server-side session lookup, its
+      # /api/v1 rewrite, the healthcheck) arrives over plain http and would be
+      # answered with a 301 to a hostname that only makes sense in a browser.
+      # Cookies stay Secure and HSTS is still sent — only the redirect is off.
+      SECURE_SSL_REDIRECT: 'false'
+    # Published on loopback only — the internet reaches it through the host's
+    # nginx, which is what terminates TLS and sets X-Forwarded-Proto.
+    ports:
+      - '127.0.0.1:8000:8000'
+    # Postgres runs on the host, not in this stack.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Checks the database too, not just the port: /api/v1/health queries it.
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8000/api/v1/health']
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: celery -A config worker -l info --concurrency 2
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      USE_REDIS_CACHE: 'true'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # The daily usage snapshot is the one job that cannot be caught up: a day it
+  # misses can never be billed. Its schedule file is on a volume so a restart
+  # resumes the schedule instead of starting it over.
+  beat:
+    build: .
+    restart: unless-stopped
+    command: celery -A config beat -l info --schedule /var/lib/celery/celerybeat-schedule --pidfile=
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      USE_REDIS_CACHE: 'true'
+    volumes:
+      - beat-schedule:/var/lib/celery
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  beat-schedule:
+
+# Shared with the frontend stack so Next can reach `web` by name without either
+# service being exposed outside the host.
+networks:
+  default:
+    name: opencloud
+    external: true

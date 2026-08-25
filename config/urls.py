@@ -4,7 +4,9 @@ from django.contrib import admin
 from django.urls import include, path
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # Not 'admin/': the console owns /admin/* on the same origin (its own
+    # administration screens), so Django's admin lives out of the way.
+    path('django-admin/', admin.site.urls),
     path('api/v1/auth/', include('apps.authentication.urls')),
     path('api/v1/user/', include('apps.tenants.urls')),
     path('api/v1/user/', include('apps.compute.urls')),
