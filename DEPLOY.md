@@ -131,9 +131,10 @@ people's processes, build the image somewhere else and load it instead of lettin
 the OOM killer choose a victim:
 
 ```bash
-# elsewhere
-docker build -t opencloud-frontend:prod .
-docker save opencloud-frontend:prod | gzip | ssh HOST 'gunzip | sudo docker load'
+# elsewhere — --platform matters: an arm64 image from an Apple Silicon machine
+# loads on the server without complaint and then restart-loops with exit 255
+docker build --platform linux/amd64 -t opencloud-frontend:prod .
+docker save opencloud-frontend:prod | gzip -1 | ssh HOST 'gunzip | sudo docker load'
 
 # on the host — no --build, so it uses the image that was just loaded
 git clone <frontend repo> /srv/opencloud/cabinet-tz
