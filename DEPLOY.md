@@ -96,7 +96,7 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 
 ```ini
 DJANGO_DEBUG=false
-DJANGO_ALLOWED_HOSTS=cabinet.opencloud.uz,127.0.0.1
+DJANGO_ALLOWED_HOSTS=cabinet.opencloud.uz,127.0.0.1,localhost,web
 CORS_ALLOWED_ORIGINS=https://cabinet.opencloud.uz
 CSRF_TRUSTED_ORIGINS=https://cabinet.opencloud.uz
 FRONTEND_BASE_URL=https://cabinet.opencloud.uz
@@ -108,8 +108,13 @@ ZADARA_SERVICE_PROJECT=...
 BILLING_SELLER_NAME=...           # and INN / ADDRESS / ACCOUNT — see §7
 ```
 
-`FRONTEND_BASE_URL` is the one that fails quietly: Zadara puts it in the
-password-reset e-mail, so a leftover `localhost:3000` reaches real inboxes.
+Two of these fail quietly rather than loudly. `FRONTEND_BASE_URL` goes into the
+password-reset e-mail Zadara sends, so a leftover `localhost:3000` reaches real
+inboxes. And **`web` must be in `DJANGO_ALLOWED_HOSTS`**: the console's route
+guards call `http://web:8000/api/v1/auth/me` over the docker network, and without
+it Django answers 400 DisallowedHost, which the guard cannot distinguish from
+"not signed in" — every page behind the login redirects to /login and the console
+is unusable while looking healthy.
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
