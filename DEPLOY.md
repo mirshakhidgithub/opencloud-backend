@@ -127,10 +127,17 @@ two needs `up -d --build`, not a restart.
 
 ## 5. nginx and TLS
 
+TLS is the existing `*.opencloud.uz` wildcard, so there is no certificate to
+issue and nothing to renew here. Confirm where it lives and put those two paths
+in the site file before reloading — nginx will not start if a certificate file is
+missing from where it is told to look:
+
 ```bash
+grep -rh ssl_certificate /etc/nginx/sites-enabled/     # the paths another site already uses
+
 sudo cp deploy/nginx/cabinet.opencloud.uz.conf /etc/nginx/sites-available/
 sudo ln -s /etc/nginx/sites-available/cabinet.opencloud.uz.conf /etc/nginx/sites-enabled/
-sudo certbot certonly --nginx -d cabinet.opencloud.uz
+sudoedit /etc/nginx/sites-available/cabinet.opencloud.uz.conf   # the two ssl_ lines
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
