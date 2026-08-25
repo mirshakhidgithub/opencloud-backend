@@ -29,6 +29,7 @@ services:
 
   web:
     build: .
+    image: opencloud-backend:prod
     restart: unless-stopped
     env_file: .env
     environment:
@@ -48,8 +49,12 @@ services:
       SECURE_SSL_REDIRECT: 'false'
     # Published on loopback only — the internet reaches it through the host's
     # nginx, which is what terminates TLS and sets X-Forwarded-Proto.
+    #
+    # 8010 rather than 8000 because this host already runs another application
+    # there. Override with WEB_PORT in .env if it ever moves; the nginx upstream
+    # has to match.
     ports:
-      - '127.0.0.1:8000:8000'
+      - '127.0.0.1:${WEB_PORT:-8010}:8000'
     # Postgres runs on the host, not in this stack.
     extra_hosts:
       - 'host.docker.internal:host-gateway'
@@ -66,6 +71,7 @@ services:
 
   worker:
     build: .
+    image: opencloud-backend:prod
     restart: unless-stopped
     command: celery -A config worker -l info --concurrency 2
     env_file: .env
@@ -85,6 +91,7 @@ services:
   # resumes the schedule instead of starting it over.
   beat:
     build: .
+    image: opencloud-backend:prod
     restart: unless-stopped
     command: celery -A config beat -l info --schedule /var/lib/celery/celerybeat-schedule --pidfile=
     env_file: .env

@@ -40,10 +40,11 @@ psql --version
 nginx -v
 ```
 
-Create the shared network once:
+Create the shared network once. The subnet is pinned so the database can be
+opened to exactly this network and nothing wider:
 
 ```bash
-docker network create opencloud
+docker network create --subnet 172.28.0.0/16 opencloud
 ```
 
 ## 2. PostgreSQL on the host
@@ -54,16 +55,24 @@ sudo -u postgres createdb opencloud --owner=opencloud
 ```
 
 The containers reach the database through the docker gateway, so Postgres has to
-listen on more than loopback and accept that subnet:
+listen on more than loopback and accept that network. Check the first before
+changing it — a host already serving other applications usually listens widely
+already, and `listen_addresses` is the one setting here that needs a **restart**,
+which interrupts every other database on the box:
 
 ```bash
-# /etc/postgresql/16/main/postgresql.conf
-listen_addresses = 'localhost,172.17.0.1'      # docker0; check `ip addr show docker0`
+sudo -u postgres psql -tAc 'show listen_addresses'    # '*' → nothing to change
+```
 
-# /etc/postgresql/16/main/pg_hba.conf — docker's private ranges, nothing wider
-host    opencloud    opencloud    172.16.0.0/12    scram-sha-256
+The access rule is narrow on purpose — this role, this database, this docker
+network — and `pg_hba.conf` only needs a **reload**, so nobody else's connections
+are dropped:
 
-sudo systemctl restart postgresql
+```bash
+# /etc/postgresql/<version>/main/pg_hba.conf
+host    opencloud    opencloud    172.28.0.0/16    scram-sha-256
+
+sudo -u postgres psql -c 'select pg_reload_conf()'
 ```
 
 Make sure the host firewall does not expose 5432 to the world; only the docker
@@ -105,21 +114,34 @@ password-reset e-mail, so a leftover `localhost:3000` reaches real inboxes.
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps          # web must become healthy
-curl -fsS http://127.0.0.1:8000/api/v1/health
+curl -fsS http://127.0.0.1:8010/api/v1/health
 ```
+
+The stacks publish on **8010** and **3010**, not 8000 and 3000, because this host
+already runs other applications on those. `WEB_PORT` / `FRONTEND_PORT` move them,
+and the nginx upstreams must say the same.
 
 Migrations run when `web` starts, so a deploy can never serve against a schema it
 does not match.
 
 ## 4. Frontend
 
+`next build` wants a couple of gigabytes of RAM. On a host shared with other
+people's processes, build the image somewhere else and load it instead of letting
+the OOM killer choose a victim:
+
 ```bash
+# elsewhere
+docker build -t opencloud-frontend:prod .
+docker save opencloud-frontend:prod | gzip | ssh HOST 'gunzip | sudo docker load'
+
+# on the host — no --build, so it uses the image that was just loaded
 git clone <frontend repo> /srv/opencloud/cabinet-tz
 cd /srv/opencloud/cabinet-tz
 docker compose -f docker-compose.prod.yml up -d --build   # no .env needed here:
                                                          # the compose sets both
                                                          # values the image wants
-curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login   # 200
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3010/login   # 200
 ```
 
 `NEXT_PUBLIC_*` is compiled into the browser bundle, so changing either of those
