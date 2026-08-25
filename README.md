@@ -143,10 +143,28 @@ endpoint reading our own tables answered in ~200 ms while the cloud-backed ones
 took seconds).
 
 ```bash
-docker compose up -d db
-DATABASE_URL=postgres://opencloud:opencloud@127.0.0.1:5432/opencloud \
-  python manage.py migrate
+docker compose up -d db          # published on 127.0.0.1:5432 for host runs
+export DATABASE_URL=postgres://opencloud:opencloud@127.0.0.1:5432/opencloud
+python manage.py migrate
 ```
+
+Verified: all migrations apply cleanly, the whole suite passes against it
+(`DJANGO_SETTINGS_MODULE=config.settings.test_pg pytest`), and the app serves
+reads and writes from it end to end.
+
+**Moving existing local data across.** The usage snapshots are the one thing that
+cannot be recreated — the cloud keeps no inventory history — so they have to come
+with you:
+
+```bash
+python manage.py dumpdata accounts billing audit tenants \
+  --natural-foreign --natural-primary --indent 2 -o local-data.json
+DATABASE_URL=postgres://... python manage.py loaddata local-data.json
+```
+
+**Switch web, worker and beat together.** They are all writers; leaving one on
+sqlite while the others move would split writes across two databases and the
+split would not announce itself.
 
 `psycopg[binary]` is pinned at 3.2.13 rather than 3.2.9: 3.2.9 publishes no
 wheel for Python 3.14, which is what the local venv runs, so the older pin could

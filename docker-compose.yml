@@ -5,6 +5,10 @@ services:
       POSTGRES_DB: opencloud
       POSTGRES_USER: opencloud
       POSTGRES_PASSWORD: opencloud
+    # Loopback-only, for the same reason as redis: so `manage.py` on the host can
+    # migrate and test against the real database instead of sqlite.
+    ports:
+      - '127.0.0.1:5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
