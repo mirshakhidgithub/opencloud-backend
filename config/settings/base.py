@@ -230,6 +230,10 @@ ZADARA_HTTP_TIMEOUT = env.int('ZADARA_HTTP_TIMEOUT', default=15)
 # their independent sources at once, so without a cap the fan-out multiplies
 # across concurrent users until the cloud starts timing out.
 ZADARA_MAX_CONCURRENT_REQUESTS = env.int('ZADARA_MAX_CONCURRENT_REQUESTS', default=12)
+
+# Seconds a cloud list stays cached, per token scope. Short on purpose: a write
+# clears only the writer's own scope, so a colleague sees it within this window.
+ZADARA_RESPONSE_CACHE_TTL = env.int('ZADARA_RESPONSE_CACHE_TTL', default=45)
 # Service (MSP read-only) account — loaded from secrets in real environments.
 # Scoping to ZADARA_SERVICE_PROJECT yields the msp_admin (cluster-wide read) token.
 ZADARA_SERVICE_ACCOUNT = env('ZADARA_SERVICE_ACCOUNT', default='')

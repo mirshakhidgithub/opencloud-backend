@@ -12,6 +12,7 @@ know the routes are real):
 `/api/v2/vms` and `/api/v2/compute/vms` are the same handler.
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -40,6 +41,66 @@ def _authed_get(path: str, token: str):
         return resp.json()
     except ValueError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Read-through cache for list endpoints
+#
+# These lists are read on nearly every page and change on human timescales, so a
+# short TTL turns a page load from several cloud round-trips into none. Detail
+# views, actions and metrics are deliberately NOT cached: a machine card polls
+# while a start/stop settles, and serving that from a cache would show the user
+# the state they just changed away from.
+#
+# **The key is derived from the TOKEN, not just the path.** Two people hitting
+# `/api/v2/vms` see different machines — their own project's — so a path-only key
+# would hand one tenant another tenant's list. The token is hashed, never stored.
+#
+# Invalidation is by version counter rather than key deletion: bumping one
+# integer expires a whole scope at once and works on any cache backend, where
+# wildcard deletes do not. A write by one administrator does not bump anyone
+# else's scope, so a colleague sees the change within the TTL rather than
+# instantly — acceptable at 45 s, and the reason the TTL is kept short.
+# ---------------------------------------------------------------------------
+
+RESPONSE_CACHE_TTL = getattr(settings, 'ZADARA_RESPONSE_CACHE_TTL', 45)
+
+_CACHE_PREFIX = 'zadara:resp'
+_VERSION_PREFIX = 'zadara:ver'
+
+
+def _scope(token: str) -> str:
+    """A stable, non-reversible id for what this token can see."""
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def _scope_version(scope: str) -> int:
+    return cache.get(f'{_VERSION_PREFIX}:{scope}') or 0
+
+
+def invalidate(token: str) -> None:
+    """Drop this scope's cached lists — call it after a write."""
+    scope = _scope(token)
+    key = f'{_VERSION_PREFIX}:{scope}'
+    cache.set(key, _scope_version(scope) + 1, None)
+
+
+def _cached_get(path: str, token: str, ttl: int = RESPONSE_CACHE_TTL):
+    scope = _scope(token)
+    key = f'{_CACHE_PREFIX}:{scope}:{_scope_version(scope)}:{hashlib.sha256(path.encode()).hexdigest()[:16]}'
+
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+
+    data = _authed_get(path, token)
+
+    # `None` is a legitimate answer from a body-less response, and caching it
+    # would be indistinguishable from a miss on the next read.
+    if data is not None:
+        cache.set(key, data, ttl)
+
+    return data
 
 
 VMS_PATH = '/api/v2/vms'
@@ -95,7 +156,7 @@ def list_elastic_ips(token: str) -> list[dict]:
     IPs to machines by port. This endpoint is friendlier: every record already
     names the `instance_id` it is bound to.
     """
-    data = _authed_get(ELASTIC_IPS_PATH, token)
+    data = _cached_get(ELASTIC_IPS_PATH, token)
     items = data if isinstance(data, list) else (data or {}).get('elastic_ips', [])
 
     return [
@@ -141,7 +202,7 @@ def list_vms(token: str, *, with_disks: bool = False) -> list[dict]:
     depended on each other.
     """
     sources = {
-        'vms': lambda: _authed_get(VMS_PATH, token),
+        'vms': lambda: _cached_get(VMS_PATH, token),
         'eips': lambda: _public_ips_by_instance(token),
     }
     if with_disks:
@@ -256,6 +317,10 @@ def vm_action(token: str, vm_id: str, action: str, force: bool = False) -> None:
         _authed_post(f'{VMS_PATH}/{vm_id}/actions/guest-reboot', token)
     else:
         raise ZadaraError('invalid_request', f'Unknown action: {action}', 400)
+
+    # Whoever just pressed the button must not be shown the old state: their
+    # cached lists go now rather than waiting out the TTL.
+    invalidate(token)
 
 
 # The console client itself is Zadara-hosted static noVNC; the API call below is
@@ -528,7 +593,7 @@ def list_volumes(token: str, *, label_media: bool = True) -> list[dict]:
     id, and every page that lists storage wants to say what it sits on. If that
     request is refused the volumes still come back, just unlabelled.
     """
-    data = _authed_get(VOLUMES_PATH, token)
+    data = _cached_get(VOLUMES_PATH, token)
     volumes = [normalize_volume(v) for v in _items(data, 'volumes') if isinstance(v, dict)]
 
     if label_media:
@@ -538,7 +603,7 @@ def list_volumes(token: str, *, label_media: bool = True) -> list[dict]:
 
 
 def list_vpcs(token: str) -> list[dict]:
-    data = _authed_get(VPCS_PATH, token)
+    data = _cached_get(VPCS_PATH, token)
 
     return [
         {
@@ -556,7 +621,7 @@ def list_vpcs(token: str) -> list[dict]:
 
 def list_alarms(token: str) -> list[dict]:
     """Alarms of the token's scope. `state` is 'closed' once it is over."""
-    data = _authed_get(ALARMS_PATH, token)
+    data = _cached_get(ALARMS_PATH, token)
 
     return [
         {
@@ -673,7 +738,7 @@ def get_vm_metrics(token: str, vm_id: str, period: str = '24h') -> dict:
 
 def list_volume_snapshots(token: str) -> list[dict]:
     """Point-in-time copies of single volumes."""
-    data = _authed_get(VOLUME_SNAPSHOTS_PATH, token)
+    data = _cached_get(VOLUME_SNAPSHOTS_PATH, token)
 
     return [
         {
@@ -695,7 +760,7 @@ def list_volume_snapshots(token: str) -> list[dict]:
 
 def list_vm_snapshots(token: str) -> list[dict]:
     """Copies of a whole machine — every volume of it at one moment."""
-    data = _authed_get(VM_SNAPSHOTS_PATH, token)
+    data = _cached_get(VM_SNAPSHOTS_PATH, token)
 
     return [
         {
@@ -719,7 +784,7 @@ def list_vm_snapshots(token: str) -> list[dict]:
 
 def list_subnets(token: str) -> list[dict]:
     """Networks inside VPCs, with how much address space is left in each."""
-    data = _authed_get(SUBNETS_PATH, token)
+    data = _cached_get(SUBNETS_PATH, token)
 
     return [
         {
@@ -762,7 +827,7 @@ def _describe_rule(rule: dict) -> str:
 
 
 def list_security_groups(token: str) -> list[dict]:
-    data = _authed_get(SECURITY_GROUPS_PATH, token)
+    data = _cached_get(SECURITY_GROUPS_PATH, token)
 
     return [
         {
@@ -780,7 +845,7 @@ def list_security_groups(token: str) -> list[dict]:
 
 
 def list_internet_gateways(token: str) -> list[dict]:
-    data = _authed_get(INTERNET_GATEWAYS_PATH, token)
+    data = _cached_get(INTERNET_GATEWAYS_PATH, token)
     gateways = []
 
     for g in _items(data, 'internet_gateways'):
@@ -802,7 +867,7 @@ def list_internet_gateways(token: str) -> list[dict]:
 
 
 def list_nat_gateways(token: str) -> list[dict]:
-    data = _authed_get(NAT_GATEWAYS_PATH, token)
+    data = _cached_get(NAT_GATEWAYS_PATH, token)
 
     return [
         {
@@ -861,7 +926,7 @@ def normalize_security_group_rule(raw: dict) -> dict:
 
 def list_security_group_rules(token: str) -> list[dict]:
     """Every firewall rule the token can see, with the id needed to remove one."""
-    data = _authed_get(SG_RULES_PATH, token)
+    data = _cached_get(SG_RULES_PATH, token)
 
     return [normalize_security_group_rule(r) for r in _items(data, 'security_group_rules') if isinstance(r, dict)]
 
@@ -931,6 +996,8 @@ def create_security_group_rule(
     except ValueError:
         created = {}
 
+    invalidate(token)
+
     return normalize_security_group_rule(created)
 
 
@@ -943,6 +1010,8 @@ def delete_security_group_rule(token: str, rule_id: str) -> None:
         raise ZadaraError('not_found', 'That rule no longer exists', 404)
     if not resp.ok:
         raise ZadaraError('upstream_error', f'Zadara returned status {resp.status_code}', resp.status_code)
+
+    invalidate(token)
 
 
 def _neutron_message(resp) -> str:
@@ -1020,7 +1089,7 @@ def label_quota_media(rows: list[dict], types: dict[str, dict]) -> None:
 
 
 def _list_quotas(path: str, token: str) -> list[dict]:
-    quotas = [normalize_quota(q) for q in (_authed_get(path, token) or []) if isinstance(q, dict)]
+    quotas = [normalize_quota(q) for q in (_cached_get(path, token) or []) if isinstance(q, dict)]
     label_quota_media(quotas, safe_volume_type_index(token))
 
     # Storage rows are per volume type, so the medium sorts before the name:
