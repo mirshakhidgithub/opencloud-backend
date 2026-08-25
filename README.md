@@ -130,3 +130,24 @@ a missing account filter and a flat ÷30 in the billing maths were each
 reintroduced and each turned the suite red. One mutation — recreating an issued
 invoice instead of returning it — passed at first, which is why
 `test_reissuing_after_a_price_change_returns_the_original_figures` exists.
+
+## Postgres
+
+Local development runs on sqlite and never sets `DATABASE_URL`. That is fine for
+one developer and wrong for a deployment: web, the Celery worker and beat are
+concurrent writers, and sqlite serialises them until one gets a lock error.
+
+Postgres is **not** a performance question here — measured, the database never
+appears in the hot path (see the latency notes in the commit history: the only
+endpoint reading our own tables answered in ~200 ms while the cloud-backed ones
+took seconds).
+
+```bash
+docker compose up -d db
+DATABASE_URL=postgres://opencloud:opencloud@127.0.0.1:5432/opencloud \
+  python manage.py migrate
+```
+
+`psycopg[binary]` is pinned at 3.2.13 rather than 3.2.9: 3.2.9 publishes no
+wheel for Python 3.14, which is what the local venv runs, so the older pin could
+not be installed outside the 3.12 container image.
