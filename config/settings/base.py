@@ -59,6 +59,7 @@ LOCAL_APPS = [
     'apps.billing',
     'apps.audit',
     'apps.admin_api',
+    'apps.platform_admin',
     'apps.integrations.zadara',
 ]
 
@@ -76,6 +77,24 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'config.urls'
+
+# --------------------------------------------------------------------------- #
+# Which front door is this process?
+# --------------------------------------------------------------------------- #
+# The same image runs twice: once for the tenant cabinet, once for the platform
+# admin panel. One flag rather than a second settings module — two modules would
+# share almost everything and drift on the rest, and the differences are these
+# three lines.
+#
+# The admin process serves a URLconf without the cabinet's routes, so they are
+# missing rather than forbidden, and names its cookies differently, so the two
+# sessions cannot be confused even on one hostname in development.
+PLATFORM_ADMIN_PROCESS = env.bool('PLATFORM_ADMIN_PROCESS', default=False)
+
+if PLATFORM_ADMIN_PROCESS:
+    ROOT_URLCONF = 'config.urls_admin'
+    SESSION_COOKIE_NAME = 'opencloud_admin_session'
+    CSRF_COOKIE_NAME = 'opencloud_admin_csrf'
 
 TEMPLATES = [
     {
@@ -167,6 +186,23 @@ REST_FRAMEWORK = {
 # Custom user model + Zadara-backed session auth.
 AUTH_USER_MODEL = 'accounts.User'
 AUTHENTICATION_BACKENDS = ['apps.authentication.backends.ZadaraSessionBackend']
+
+# --------------------------------------------------------------------------- #
+# Platform administration (admin.opencloud.uz)
+# --------------------------------------------------------------------------- #
+# What the hardware actually has, so the admin panel can show usage as a share
+# of capacity instead of a bare sum nobody can act on. Zadara does not report
+# this, so it is configuration; leave a key out and that row simply shows the
+# absolute number with no percentage.
+PLATFORM_CAPACITY = {
+    key: value
+    for key, value in {
+        'vcpus': env.int('PLATFORM_CAPACITY_VCPUS', default=0),
+        'ramMB': env.int('PLATFORM_CAPACITY_RAM_MB', default=0),
+        'diskGB': env.int('PLATFORM_CAPACITY_DISK_GB', default=0),
+    }.items()
+    if value
+}
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'OpenCloud Console API',

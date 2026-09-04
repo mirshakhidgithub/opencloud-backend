@@ -18,6 +18,10 @@ urlpatterns = [
     path('api/v1/user/', include('apps.billing.urls')),
     path('api/v1/admin/', include('apps.admin_api.urls')),
     path('api/v1/admin/', include('apps.billing.admin_urls')),
+    # Platform administration — a different audience and a different session
+    # from /api/v1/admin/*, which is an account admin looking at their own
+    # account. Served to admin.opencloud.uz only.
+    path('api/v1/platform/', include('apps.platform_admin.urls')),
     path('api/v1/', include('apps.common.urls')),
 ]
 

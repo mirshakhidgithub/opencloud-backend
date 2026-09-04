@@ -118,16 +118,31 @@ is unusable while looking healthy.
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.prod.yml ps          # web must become healthy
-curl -fsS http://127.0.0.1:8010/api/v1/health
+docker compose -f docker-compose.prod.yml ps          # web and web-admin healthy
+curl -fsS http://127.0.0.1:8010/api/v1/health         # cabinet API
+curl -fsS http://127.0.0.1:8020/api/v1/health         # platform admin API
 ```
 
-The stacks publish on **8010** and **3010**, not 8000 and 3000, because this host
-already runs other applications on those. `WEB_PORT` / `FRONTEND_PORT` move them,
-and the nginx upstreams must say the same.
+Ports: **8010** the cabinet API, **8020** the platform admin API, **3010** the
+cabinet, **3020** the admin panel — not 8000/3000, because this host already runs
+other applications there. `WEB_PORT` / `WEB_ADMIN_PORT` / `FRONTEND_PORT` move
+them, and the nginx upstreams must say the same.
+
+`web-admin` is the same image as `web` with `PLATFORM_ADMIN_PROCESS=true`, which
+gives it a URLconf holding only `/api/v1/platform/*`. Two checks that it is
+wired correctly, both of which should fail:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8020/api/v1/user/vms   # expect 404
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/api/v1/platform/accounts  # expect 404
+```
 
 Migrations run when `web` starts, so a deploy can never serve against a schema it
-does not match.
+does not match. `web-admin` runs the same image but is given an explicit gunicorn
+command that skips them: the two share one database, and one migrator is the only
+safe number — both running the image's default CMD would race for the migration
+lock on every deploy. If `web-admin` comes up first after a schema change it will
+error until `web` has migrated, which is the right way round.
 
 ## 4. Frontend
 

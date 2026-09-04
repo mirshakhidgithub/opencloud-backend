@@ -69,6 +69,58 @@ services:
       start_period: 40s
       retries: 3
 
+  # The platform admin panel's API. Same image, same database, same Redis — a
+  # second process, not a second application: it reads the cabinet's own tables
+  # (who is blocked, who did what), so splitting the code would mean two owners
+  # of one schema.
+  #
+  # What the split buys is isolation. PLATFORM_ADMIN_PROCESS swaps in a URLconf
+  # that has no cabinet routes at all, so a mistake in the edge configuration
+  # can only produce a 404 here, never a tenant endpoint served to the admin
+  # domain. Its session and CSRF cookies are named differently for the same
+  # reason. And a cold cluster snapshot fans out across every account — a heavy
+  # request that no longer competes with tenant traffic for the same workers.
+  web-admin:
+    build: .
+    image: opencloud-backend:prod
+    restart: unless-stopped
+    # The image's own CMD runs `migrate` before gunicorn. `web` is the one that
+    # owns the schema; if this container ran it too, both would race for the
+    # migration lock on every deploy. Same database, one migrator — so gunicorn
+    # only, and fewer workers, since a handful of operators do not need three.
+    command: >-
+      gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2
+      --timeout 180 --access-logfile - --error-logfile -
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      PLATFORM_ADMIN_PROCESS: 'true'
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      USE_REDIS_CACHE: 'true'
+      # Same reasoning as `web`: this port is loopback/docker-only, so the
+      # redirect would answer internal calls with a 301 to a browser hostname.
+      SECURE_SSL_REDIRECT: 'false'
+      # Only the admin origin. Overrides whatever .env sets for the cabinet —
+      # this process should not accept the cabinet's origin on an unsafe request.
+      CORS_ALLOWED_ORIGINS: ${ADMIN_CORS_ALLOWED_ORIGINS:-https://admin.opencloud.uz}
+      CSRF_TRUSTED_ORIGINS: ${ADMIN_CSRF_TRUSTED_ORIGINS:-https://admin.opencloud.uz}
+    # 8020: 8000 is another application on this host and 8010 is the cabinet API.
+    # The nginx upstream in the admin-tz repo has to match.
+    ports:
+      - '127.0.0.1:${WEB_ADMIN_PORT:-8020}:8000'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8000/api/v1/health']
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
   worker:
     build: .
     image: opencloud-backend:prod

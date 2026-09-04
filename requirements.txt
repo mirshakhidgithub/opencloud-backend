@@ -11,6 +11,9 @@ gunicorn==23.0.0
 # needs no shared volume with the container.
 whitenoise[brotli]==6.12.0
 cryptography==44.0.1
+# TOTP for platform operators. The cabinet's second factor is Keystone's; the
+# admin panel has no Keystone identity to lean on, so it computes its own.
+pyotp==2.9.0
 requests==2.32.3
 
 # Tests
