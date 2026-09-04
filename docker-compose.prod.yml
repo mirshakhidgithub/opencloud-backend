@@ -103,8 +103,8 @@ services:
       SECURE_SSL_REDIRECT: 'false'
       # Only the admin origin. Overrides whatever .env sets for the cabinet —
       # this process should not accept the cabinet's origin on an unsafe request.
-      CORS_ALLOWED_ORIGINS: ${ADMIN_CORS_ALLOWED_ORIGINS:-https://admin.opencloud.uz}
-      CSRF_TRUSTED_ORIGINS: ${ADMIN_CSRF_TRUSTED_ORIGINS:-https://admin.opencloud.uz}
+      CORS_ALLOWED_ORIGINS: ${ADMIN_CORS_ALLOWED_ORIGINS:-https://admin-cabinet.opencloud.uz}
+      CSRF_TRUSTED_ORIGINS: ${ADMIN_CSRF_TRUSTED_ORIGINS:-https://admin-cabinet.opencloud.uz}
     # 8020: 8000 is another application on this host and 8010 is the cabinet API.
     # The nginx upstream in the admin-tz repo has to match.
     ports:

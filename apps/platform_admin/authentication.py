@@ -4,7 +4,7 @@ Session authentication for the admin panel, on its own session key.
 Django's own login machinery writes `_auth_user_id` and resolves it against
 AUTH_USER_MODEL. Operators are not that model, so this reads a key of its own —
 which is the whole isolation story: a cabinet session cookie replayed at
-admin.opencloud.uz carries `_auth_user_id` and no `platform_admin_id`, so it
+admin-cabinet.opencloud.uz carries `_auth_user_id` and no `platform_admin_id`, so it
 authenticates as nobody here. The reverse holds too.
 
 CSRF is enforced exactly as DRF's SessionAuthentication does; skipping it

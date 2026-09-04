@@ -96,7 +96,7 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 
 ```ini
 DJANGO_DEBUG=false
-DJANGO_ALLOWED_HOSTS=cabinet.opencloud.uz,127.0.0.1,localhost,web
+DJANGO_ALLOWED_HOSTS=cabinet.opencloud.uz,admin-cabinet.opencloud.uz,127.0.0.1,localhost,web,web-admin
 CORS_ALLOWED_ORIGINS=https://cabinet.opencloud.uz
 CSRF_TRUSTED_ORIGINS=https://cabinet.opencloud.uz
 FRONTEND_BASE_URL=https://cabinet.opencloud.uz
@@ -110,11 +110,14 @@ BILLING_SELLER_NAME=...           # and INN / ADDRESS / ACCOUNT — see §7
 
 Two of these fail quietly rather than loudly. `FRONTEND_BASE_URL` goes into the
 password-reset e-mail Zadara sends, so a leftover `localhost:3000` reaches real
-inboxes. And **`web` must be in `DJANGO_ALLOWED_HOSTS`**: the console's route
-guards call `http://web:8000/api/v1/auth/me` over the docker network, and without
-it Django answers 400 DisallowedHost, which the guard cannot distinguish from
-"not signed in" — every page behind the login redirects to /login and the console
-is unusable while looking healthy.
+inboxes. And **`web` and `web-admin` must both be in `DJANGO_ALLOWED_HOSTS`**: each
+console's route guards call `http://web:8000/api/v1/auth/me` (the cabinet) or
+`http://web-admin:8000/api/v1/platform/auth/me` (the admin panel) over the docker
+network, and without the hostname Django answers 400 DisallowedHost, which the
+guard cannot distinguish from "not signed in" — every page behind the login
+redirects to /login and the console is unusable while looking healthy. Both
+processes read this one `.env`, so the list carries both public domains and both
+service names.
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build

@@ -10,7 +10,7 @@ accounts must not live in a table the cloud can write to, and must not be one
 So this is a second, self-contained identity: local password, mandatory TOTP,
 no Zadara link at all. It is not AUTH_USER_MODEL — `PlatformSessionAuthentication`
 resolves it from its own session key, which means a valid cabinet session
-replayed at admin.opencloud.uz authenticates as nobody.
+replayed at admin-cabinet.opencloud.uz authenticates as nobody.
 """
 
 from django.contrib.auth.hashers import check_password, is_password_usable, make_password

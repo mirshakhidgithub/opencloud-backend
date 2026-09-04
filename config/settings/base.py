@@ -188,7 +188,7 @@ AUTH_USER_MODEL = 'accounts.User'
 AUTHENTICATION_BACKENDS = ['apps.authentication.backends.ZadaraSessionBackend']
 
 # --------------------------------------------------------------------------- #
-# Platform administration (admin.opencloud.uz)
+# Platform administration (admin-cabinet.opencloud.uz)
 # --------------------------------------------------------------------------- #
 # What the hardware actually has, so the admin panel can show usage as a share
 # of capacity instead of a bare sum nobody can act on. Zadara does not report

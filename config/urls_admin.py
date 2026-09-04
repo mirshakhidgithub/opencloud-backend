@@ -1,5 +1,5 @@
 """
-URL map for the platform-admin process (admin.opencloud.uz).
+URL map for the platform-admin process (admin-cabinet.opencloud.uz).
 
 Deliberately short. The cabinet's own namespaces — `/api/v1/user/*`,
 `/api/v1/auth/*`, `/api/v1/admin/*` — are absent, so on this process they do not
