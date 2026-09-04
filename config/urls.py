@@ -1,4 +1,12 @@
-"""Root URL configuration."""
+"""
+Root URL configuration — the tenant cabinet's process.
+
+The platform admin panel's routes are deliberately NOT here. They live in
+`config/urls_admin.py`, which the second process loads instead (see
+PLATFORM_ADMIN_PROCESS in settings). Keeping the two maps disjoint is the point
+of running two processes at all: /api/v1/platform/* has to be missing here, not
+merely refused, or cabinet.opencloud.uz would still route to it.
+"""
 
 from django.contrib import admin
 from django.urls import include, path
@@ -18,10 +26,6 @@ urlpatterns = [
     path('api/v1/user/', include('apps.billing.urls')),
     path('api/v1/admin/', include('apps.admin_api.urls')),
     path('api/v1/admin/', include('apps.billing.admin_urls')),
-    # Platform administration — a different audience and a different session
-    # from /api/v1/admin/*, which is an account admin looking at their own
-    # account. Served to admin.opencloud.uz only.
-    path('api/v1/platform/', include('apps.platform_admin.urls')),
     path('api/v1/', include('apps.common.urls')),
 ]
 
