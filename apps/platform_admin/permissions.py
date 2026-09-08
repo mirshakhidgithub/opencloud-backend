@@ -30,6 +30,20 @@ class CanWritePlatform(IsPlatformAdmin):
         return super().has_permission(request, view) and request.user.can_write
 
 
+class CanWriteBilling(IsPlatformAdmin):
+    """Operators who may change money (OWNER, FINANCE).
+
+    Separate from `CanWritePlatform` on purpose: an invoice under a number and a
+    price list are a different authority from suspending an account, and the two
+    roles that hold them do not overlap.
+    """
+
+    message = 'This action needs the Owner or Finance role.'
+
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and request.user.can_bill
+
+
 class IsPlatformOwner(IsPlatformAdmin):
     """Managing other operators is the Owner's alone."""
 

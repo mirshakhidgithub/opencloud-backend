@@ -60,5 +60,6 @@ def me_payload(admin: PlatformAdmin) -> dict:
         'name': admin.name,
         'role': admin.role,
         'canWrite': admin.can_write,
+        'canBill': admin.can_bill,
         'lastLoginAt': admin.last_login_at.isoformat() if admin.last_login_at else None,
     }

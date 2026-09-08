@@ -8,6 +8,14 @@ from .auth_views import (
     MeView,
     PasswordChangeView,
 )
+from .billing_views import (
+    AccountBillingView,
+    AccountInvoiceView,
+    AccountProfileView,
+    BillingOverviewView,
+    InvoiceListView,
+    TariffView,
+)
 from .views import (
     AccountDetailView,
     AccountsView,
@@ -34,4 +42,10 @@ urlpatterns = [
     path('health', HealthView.as_view(), name='platform-health'),
     path('audit', AuditView.as_view(), name='platform-audit'),
     path('activity', ActivityView.as_view(), name='platform-activity'),
+    path('billing', BillingOverviewView.as_view(), name='platform-billing'),
+    path('billing/<str:account>', AccountBillingView.as_view(), name='platform-account-billing'),
+    path('billing/<str:account>/invoice', AccountInvoiceView.as_view(), name='platform-account-invoice'),
+    path('billing/<str:account>/profile', AccountProfileView.as_view(), name='platform-account-profile'),
+    path('invoices', InvoiceListView.as_view(), name='platform-invoices'),
+    path('tariffs', TariffView.as_view(), name='platform-tariffs'),
 ]

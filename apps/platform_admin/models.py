@@ -28,6 +28,12 @@ ROLE_CHOICES = [(OWNER, 'Owner'), (OPS, 'Operations'), (SUPPORT, 'Support'), (FI
 # Roles allowed to change platform state (disable users, suspend accounts).
 WRITE_ROLES = frozenset({OWNER, OPS})
 
+# Roles allowed to change money: price lists, buyer requisites, issuing an
+# invoice. Deliberately not the same set — issuing a document under a number is
+# not the same authority as restarting someone's machine, and OPS has no
+# business doing the first while FINANCE has none doing the second.
+BILLING_ROLES = frozenset({OWNER, FINANCE})
+
 # After this many consecutive failures the account stops answering for a while.
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
@@ -106,6 +112,10 @@ class PlatformAdmin(models.Model):
     @property
     def can_write(self) -> bool:
         return self.role in WRITE_ROLES
+
+    @property
+    def can_bill(self) -> bool:
+        return self.role in BILLING_ROLES
 
 
 class AdminAction(models.Model):

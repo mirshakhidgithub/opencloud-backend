@@ -7,6 +7,7 @@ would let a change in our own client slip through a green suite.
 """
 
 import pytest
+from django.conf import settings
 from django.core.cache import cache
 
 from apps.accounts.models import User
@@ -56,5 +57,33 @@ def signed_in(client, make_user, monkeypatch):
         vault.store(session.session_key, token)
 
         return user
+
+    return _sign_in
+
+
+@pytest.fixture
+def platform_client(client, db):
+    """A signed-in platform operator, on the admin process's URL map.
+
+    The panel runs as a second Django process with `config.urls_admin`, where
+    none of the cabinet's routes exist — so a test that reached the platform
+    endpoints through the cabinet's URLconf would be testing a deployment we do
+    not run. `pytest.mark.urls` on the test class switches the map; this fixture
+    only puts an operator in the session, the way `start_session` does.
+    """
+    from apps.platform_admin.authentication import SESSION_KEY
+    from apps.platform_admin.models import FINANCE, PlatformAdmin
+
+    def _sign_in(role=FINANCE, email='finance@opencloud.uz'):
+        admin = PlatformAdmin.objects.create(email=email, name='Operator', role=role)
+        admin.set_password('irrelevant-in-tests')
+        admin.save()
+
+        session = client.session
+        session[SESSION_KEY] = admin.pk
+        session.save()
+        client.cookies[settings.SESSION_COOKIE_NAME] = session.session_key
+
+        return admin
 
     return _sign_in
