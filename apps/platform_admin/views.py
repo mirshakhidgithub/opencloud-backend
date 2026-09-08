@@ -33,8 +33,19 @@ from .serializers import AdminActionSerializer
 
 
 def _snapshot_meta(snap: dict) -> dict:
-    """What every snapshot-backed screen has to show alongside the numbers."""
-    return {'builtAt': snap['builtAt'], 'stale': snap['stale'], 'buildSeconds': snap['buildSeconds']}
+    """What every snapshot-backed screen has to show alongside the numbers.
+
+    `unavailable` travels with the age for the same reason the age travels at
+    all: a screen must be able to say which figures are missing rather than
+    print a confident zero for a list nobody could read.
+    """
+    return {
+        'builtAt': snap['builtAt'],
+        'stale': snap['stale'],
+        'buildSeconds': snap['buildSeconds'],
+        'unavailable': snap.get('unavailable', []),
+        'unreadableAccounts': snap.get('unreadableAccounts', []),
+    }
 
 
 def _wants_refresh(request) -> bool:
@@ -248,9 +259,13 @@ class ResourcesView(PlatformAPIView):
     """
     GET /platform/resources — what the cluster is carrying, and for whom.
 
-    A bare sum of vCPU is not a number anyone acts on. What makes it actionable
-    is the same figure against what the hardware has, so the response carries the
-    configured capacity next to the usage and the ratio between them.
+    Every kind of it: compute, block storage, snapshots, addresses and networks,
+    per account. Compute alone would let a tenant with two idle machines and
+    forty terabytes of snapshots read as one of the small ones.
+
+    A bare sum of vCPU is not a number anyone acts on either. What makes it
+    actionable is the same figure against what the hardware has, so the response
+    carries the configured capacity next to the usage and the ratio between them.
     """
 
     permission_classes = [IsPlatformAdmin]
@@ -267,18 +282,10 @@ class ResourcesView(PlatformAPIView):
                     'capacity': capacity,
                     'utilisation': _utilisation(totals, capacity),
                     'byAccount': [
-                        {
-                            'id': a['id'],
-                            'name': a['name'],
-                            'vmCount': a['vmCount'],
-                            'runningVms': a['runningVms'],
-                            'vcpus': a['vcpus'],
-                            'ramMB': a['ramMB'],
-                            'diskGB': a['diskGB'],
-                        }
+                        {**{k: v for k, v in a.items() if k != 'projects'}, 'projectCount': len(a['projects'])}
                         for a in snap['accounts']
                     ],
-                    'unattributedVms': snap['unattributedVms'],
+                    'unattributed': snap['unattributed'],
                 },
                 'meta': _snapshot_meta(snap),
             }
@@ -287,7 +294,8 @@ class ResourcesView(PlatformAPIView):
 
 def _utilisation(totals: dict, capacity: dict) -> dict:
     """Allocated ÷ installed, per dimension. Absent where capacity is unset —
-    a made-up denominator is worse than no percentage at all."""
+    a made-up denominator is worse than no percentage at all, and absent too
+    where the figure itself could not be read this time round."""
     out = {}
     for key, installed in capacity.items():
         used = totals.get(key)

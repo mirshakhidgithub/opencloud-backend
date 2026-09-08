@@ -194,12 +194,16 @@ AUTHENTICATION_BACKENDS = ['apps.authentication.backends.ZadaraSessionBackend']
 # of capacity instead of a bare sum nobody can act on. Zadara does not report
 # this, so it is configuration; leave a key out and that row simply shows the
 # absolute number with no percentage.
+# Installed hardware, for the share-of-capacity figures in the platform panel.
+# Keyed by the snapshot field each denominator belongs to: the storage line is
+# measured from the volumes the cluster actually carries, so PLATFORM_CAPACITY_
+# DISK_GB is read as GiB of block storage. The env names are unchanged.
 PLATFORM_CAPACITY = {
     key: value
     for key, value in {
         'vcpus': env.int('PLATFORM_CAPACITY_VCPUS', default=0),
         'ramMB': env.int('PLATFORM_CAPACITY_RAM_MB', default=0),
-        'diskGB': env.int('PLATFORM_CAPACITY_DISK_GB', default=0),
+        'storageGiB': env.int('PLATFORM_CAPACITY_DISK_GB', default=0),
     }.items()
     if value
 }
