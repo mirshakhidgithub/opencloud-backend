@@ -7,8 +7,9 @@ overwriting them from whatever the cloud says. An identity that can see all 21
 accounts must not live in a table the cloud can write to, and must not be one
 `is_platform_admin=True` away from a customer row.
 
-So this is a second, self-contained identity: local password, mandatory TOTP,
-no Zadara link at all. It is not AUTH_USER_MODEL — `PlatformSessionAuthentication`
+So this is a second, self-contained identity: local password, a mandatory second
+factor (TOTP, or a static access code an owner sets for one operator), no Zadara
+link at all. It is not AUTH_USER_MODEL — `PlatformSessionAuthentication`
 resolves it from its own session key, which means a valid cabinet session
 replayed at admin-cabinet.opencloud.uz authenticates as nobody.
 """
@@ -52,6 +53,13 @@ class PlatformAdmin(models.Model):
     totp_secret = models.CharField(max_length=255, blank=True)
     totp_confirmed_at = models.DateTimeField(null=True, blank=True)
 
+    # A fixed second code for an operator who signs in without an authenticator
+    # app. Set only from the command line (`setplatformadmincode`), and when set
+    # it REPLACES TOTP for this one operator — everyone else keeps TOTP. Hashed
+    # exactly like the password, because that is what it is: a second secret
+    # that does not expire, not a one-time code.
+    access_code_hash = models.CharField(max_length=255, blank=True)
+
     failed_attempts = models.PositiveSmallIntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)
 
@@ -88,6 +96,21 @@ class PlatformAdmin(models.Model):
         if not is_password_usable(self.password_hash):
             return False
         return check_password(raw, self.password_hash)
+
+    # -- Static access code ------------------------------------------------- #
+
+    @property
+    def uses_access_code(self) -> bool:
+        return bool(self.access_code_hash) and is_password_usable(self.access_code_hash)
+
+    def set_access_code(self, raw: str | None) -> None:
+        """An empty value clears the code and puts the operator back on TOTP."""
+        self.access_code_hash = make_password(raw) if raw else ''
+
+    def check_access_code(self, raw: str) -> bool:
+        if not self.uses_access_code:
+            return False
+        return check_password(raw, self.access_code_hash)
 
     # -- Lockout ------------------------------------------------------------ #
 
@@ -151,9 +174,11 @@ class AdminAction(models.Model):
     class Meta:
         db_table = 'platform_admin_actions'
         ordering = ['-created_at']
+        # Named as 0001 created them; unnamed, every makemigrations proposes
+        # renaming the live indexes.
         indexes = [
-            models.Index(fields=['action', '-created_at']),
-            models.Index(fields=['target_account', '-created_at']),
+            models.Index(fields=['action', '-created_at'], name='pa_action_created_idx'),
+            models.Index(fields=['target_account', '-created_at'], name='pa_target_created_idx'),
         ]
 
     def __str__(self):

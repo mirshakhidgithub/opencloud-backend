@@ -1,5 +1,9 @@
 """
-Sign-in for platform operators: password, then TOTP. Always both.
+Sign-in for platform operators: password, then a second factor. Always both.
+
+The second factor is TOTP, except for an operator an owner has given a static
+access code (`setplatformadmincode`) — for them the code replaces TOTP. Either
+way step 1 only ever yields a ticket, and only step 2 yields a session.
 
 Enrolment is folded into the first sign-in rather than offered as a setting an
 operator might never open. Until the second factor is confirmed there is no
@@ -69,6 +73,9 @@ class LoginView(APIView):
             )
             raise AppError(message=_BAD_CREDENTIALS, code='invalid_credentials', status_code=401)
 
+        if admin.uses_access_code:
+            return Response({'data': {'stage': 'code', 'ticket': tickets.issue(admin.pk, enrolling=False)}})
+
         if admin.totp_confirmed_at and admin.totp_secret:
             return Response({'data': {'stage': 'totp', 'ticket': tickets.issue(admin.pk, enrolling=False)}})
 
@@ -92,7 +99,8 @@ class LoginView(APIView):
 
 
 class LoginVerifyView(APIView):
-    """Step 2 — the six digits. This is the only place a session is created."""
+    """Step 2 — the six digits, or the static access code. This is the only
+    place a session is created."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -112,21 +120,44 @@ class LoginVerifyView(APIView):
             tickets.revoke(ticket)
             raise AppError(message=_BAD_CREDENTIALS, code='invalid_credentials', status_code=401)
 
-        enrolling = payload['enrolling']
-        secret = totp.decrypt(payload['pending_secret']) if enrolling else totp.decrypt(admin.totp_secret)
-
-        if not secret or not totp.verify(secret, code, admin_id=admin.pk):
-            admin.note_failure()
-            services.record(
-                request, 'admin.login', actor=admin, outcome=AdminAction.FAILURE, error_code='bad_totp'
+        # The lockout has to hold here too, not only at the password. A ticket
+        # lives four minutes, and without this check it is four minutes of
+        # unlimited guesses at the second factor — harmless against a TOTP code
+        # that changes every 30 seconds, fatal against a static one.
+        if admin.is_locked:
+            tickets.revoke(ticket)
+            services.record(request, 'admin.login', actor=admin, outcome=AdminAction.FAILURE, error_code='locked')
+            raise AppError(
+                message='Too many failed attempts. Try again in a few minutes.',
+                code='account_locked',
+                status_code=403,
             )
-            raise AppError(message='That code is not valid.', code='invalid_mfa_code', status_code=401)
 
-        if enrolling:
-            admin.totp_secret = totp.encrypt(secret)
-            admin.totp_confirmed_at = timezone.now()
-            admin.save(update_fields=['totp_secret', 'totp_confirmed_at'])
-            services.record(request, 'admin.totp.enroll', actor=admin)
+        # Decided by the operator's settings now, not by the stage step 1
+        # announced: whatever factor this operator is on is the one that counts.
+        if admin.uses_access_code:
+            if not admin.check_access_code(code):
+                admin.note_failure()
+                services.record(
+                    request, 'admin.login', actor=admin, outcome=AdminAction.FAILURE, error_code='bad_access_code'
+                )
+                raise AppError(message='That code is not valid.', code='invalid_access_code', status_code=401)
+        else:
+            enrolling = payload['enrolling']
+            secret = totp.decrypt(payload['pending_secret']) if enrolling else totp.decrypt(admin.totp_secret)
+
+            if not secret or not totp.verify(secret, code, admin_id=admin.pk):
+                admin.note_failure()
+                services.record(
+                    request, 'admin.login', actor=admin, outcome=AdminAction.FAILURE, error_code='bad_totp'
+                )
+                raise AppError(message='That code is not valid.', code='invalid_mfa_code', status_code=401)
+
+            if enrolling:
+                admin.totp_secret = totp.encrypt(secret)
+                admin.totp_confirmed_at = timezone.now()
+                admin.save(update_fields=['totp_secret', 'totp_confirmed_at'])
+                services.record(request, 'admin.totp.enroll', actor=admin)
 
         tickets.revoke(ticket)
         start_session(request, admin)
@@ -184,4 +215,19 @@ def password_problem(password: str) -> str | None:
         return 'Password must be at least 12 characters.'
     if password.isdigit() or password.isalpha():
         return 'Password must mix letters, digits and punctuation.'
+    return None
+
+
+# Shorter than a password on purpose — it is typed at every sign-in — and safe
+# only because the lockout covers step 2: five wrong guesses, then 15 minutes.
+ACCESS_CODE_MIN_LENGTH = 6
+
+
+def access_code_problem(admin: PlatformAdmin, code: str) -> str | None:
+    """The static access code rule. `admin` must already carry its password."""
+    if len(code or '') < ACCESS_CODE_MIN_LENGTH:
+        return f'The access code must be at least {ACCESS_CODE_MIN_LENGTH} characters.'
+    if admin.check_password(code):
+        # Two factors that are the same string are one factor.
+        return 'The access code must differ from the password.'
     return None
