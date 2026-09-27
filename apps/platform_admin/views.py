@@ -16,7 +16,7 @@ from django.db import connection
 from django.db.models import Count, Q
 from rest_framework.response import Response
 
-from apps.accounts.models import User
+from apps.accounts.models import AccountSettings, User
 from apps.audit.models import AuditLog
 from apps.audit.serializers import AuditLogSerializer
 from apps.common.exceptions import AppError
@@ -28,7 +28,7 @@ from apps.integrations.zadara.exceptions import ZadaraError
 from . import services, snapshot
 from .authentication import PlatformAPIView, PlatformListAPIView
 from .models import AdminAction
-from .permissions import CanWritePlatform, IsPlatformAdmin
+from .permissions import CanWriteOrBill, CanWritePlatform, IsPlatformAdmin
 from .serializers import AdminActionSerializer
 
 
@@ -88,10 +88,34 @@ def _cabinet_user_counts() -> dict[str, int]:
     return {(r['account'] or '').lower(): r['n'] for r in rows}
 
 
-class AccountDetailView(PlatformAPIView):
-    """GET /platform/accounts/<id> — one account: projects, users, footprint."""
+def _settings_payload(account_id: str) -> dict:
+    row = AccountSettings.objects.filter(domain_id=account_id).first()
 
-    permission_classes = [IsPlatformAdmin]
+    return {
+        'countBackupSnapshots': row.count_backup_snapshots if row else True,
+        'updatedAt': row.updated_at.isoformat() if row else None,
+        'updatedBy': row.updated_by if row else None,
+    }
+
+
+class AccountDetailView(PlatformAPIView):
+    """
+    GET   /platform/accounts/<id> — one account: projects, users, footprint, settings.
+    PATCH /platform/accounts/<id> — change its settings.
+
+    The one setting so far is `countBackupSnapshots`: off hides the snapshots a
+    protection group takes from the client's cabinet and leaves them off the
+    bill. The operator keeps seeing every snapshot here either way — hiding a
+    figure from a client is not a reason to hide it from the people running the
+    cluster.
+    """
+
+    def get_permissions(self):
+        # One endpoint, two audiences — the card you read is the card you edit.
+        if self.request.method == 'PATCH':
+            return [CanWriteOrBill()]
+
+        return [IsPlatformAdmin()]
 
     def get(self, request, account_id: str):
         entry = snapshot.account(account_id)
@@ -112,7 +136,45 @@ class AccountDetailView(PlatformAPIView):
             user['lastSeenAt'] = row.last_seen_at.isoformat() if row else None
             user['appRole'] = row.app_role if row else None
 
-        return Response({'data': {**entry, 'users': users}})
+        return Response({'data': {**entry, 'users': users, 'settings': _settings_payload(account_id)}})
+
+    def patch(self, request, account_id: str):
+        entry = snapshot.account(account_id)
+        if entry is None:
+            raise AppError(message='No such account.', code='account_not_found', status_code=404)
+
+        payload = request.data if isinstance(request.data, dict) else {}
+        count_backups = payload.get('countBackupSnapshots')
+
+        # A real boolean, not something truthy: "false" as a string would read
+        # as on, and this switch decides what a client is billed.
+        if not isinstance(count_backups, bool):
+            raise AppError(
+                message='`countBackupSnapshots` must be true or false.',
+                code='invalid_request',
+                status_code=400,
+            )
+
+        AccountSettings.objects.update_or_create(
+            domain_id=account_id,
+            defaults={
+                'account': entry['name'],
+                'count_backup_snapshots': count_backups,
+                'updated_by': request.user.email,
+            },
+        )
+
+        services.record(
+            request,
+            'account.settings.update',
+            target_account=entry['name'],
+            target_type='account',
+            target_id=account_id,
+            target_name=entry['name'],
+            detail={'countBackupSnapshots': count_backups},
+        )
+
+        return Response({'data': {'id': account_id, 'settings': _settings_payload(account_id)}})
 
 
 class UsersView(PlatformAPIView):

@@ -24,6 +24,7 @@ import time
 
 from django.core.cache import cache
 
+from apps.accounts import backups
 from apps.common.concurrency import gather
 
 from apps.integrations.zadara import resources as zadara_resources
@@ -41,8 +42,8 @@ TTL_SECONDS = 120
 # — an operator diagnosing an outage is exactly who needs the numbers most.
 FALLBACK_TTL_SECONDS = 24 * 60 * 60
 
-_KEY = 'platform_snapshot:v2'
-_FALLBACK_KEY = 'platform_snapshot_fallback:v2'
+_KEY = 'platform_snapshot:v3'
+_FALLBACK_KEY = 'platform_snapshot_fallback:v3'
 
 _RUNNING = frozenset({'running', 'active'})
 
@@ -54,7 +55,7 @@ _RUNNING = frozenset({'running', 'active'})
 FIELDS_BY_SOURCE = {
     'vms': ('vmCount', 'runningVms', 'vcpus', 'ramMB'),
     'volumes': ('volumeCount', 'storageGiB', 'storageByMedia'),
-    'volumeSnapshots': ('volumeSnapshotCount', 'volumeSnapshotGiB'),
+    'volumeSnapshots': ('volumeSnapshotCount', 'volumeSnapshotGiB', 'backupSnapshotCount', 'backupSnapshotGiB'),
     'vmSnapshots': ('vmSnapshotCount',),
     'publicIps': ('publicIps',),
     'vpcs': ('vpcCount',),
@@ -76,6 +77,11 @@ def _blank_usage() -> dict:
         'storageByMedia': [],
         'volumeSnapshotCount': 0,
         'volumeSnapshotGiB': 0,
+        # The part of the volume snapshots that protection groups took. Always
+        # counted, whatever the account's setting: the operator deciding whether
+        # to bill backups needs to see how much is at stake.
+        'backupSnapshotCount': 0,
+        'backupSnapshotGiB': 0,
         'vmSnapshotCount': 0,
         'publicIps': 0,
         'vpcCount': 0,
@@ -103,6 +109,9 @@ def _add_volume(usage: dict, volume: dict) -> None:
 def _add_volume_snapshot(usage: dict, snap: dict) -> None:
     usage['volumeSnapshotCount'] += 1
     usage['volumeSnapshotGiB'] += snap.get('sizeGiB') or 0
+    if backups.is_backup(snap):
+        usage['backupSnapshotCount'] += 1
+        usage['backupSnapshotGiB'] += snap.get('sizeGiB') or 0
 
 
 _FOLD = {
@@ -256,6 +265,7 @@ def _totals(accounts, rows: dict[str, list]) -> dict:
     accounts = list(accounts)
     volumes = rows.get('volumes') or []
     snapshots = rows.get('volumeSnapshots') or []
+    scheduled = [s for s in snapshots if backups.is_backup(s)]
 
     return {
         'accounts': len(accounts),
@@ -269,6 +279,8 @@ def _totals(accounts, rows: dict[str, list]) -> dict:
         'storageByMedia': zadara_resources.media_totals(volumes),
         'volumeSnapshotCount': len(snapshots),
         'volumeSnapshotGiB': sum(s.get('sizeGiB') or 0 for s in snapshots),
+        'backupSnapshotCount': len(scheduled),
+        'backupSnapshotGiB': sum(s.get('sizeGiB') or 0 for s in scheduled),
         'vmSnapshotCount': len(rows.get('vmSnapshots') or []),
         'publicIps': len(rows.get('publicIps') or []),
         'vpcCount': len(rows.get('vpcs') or []),

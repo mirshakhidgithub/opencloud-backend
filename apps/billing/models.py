@@ -108,6 +108,14 @@ class UsageSnapshot(models.Model):
     elastic_ips = models.PositiveIntegerField(default=0)
     snapshot_gib = models.PositiveIntegerField(default=0)
 
+    # The part of `snapshot_gib` that protection groups took — scheduled backups.
+    # Stored as a fact like everything else here; whether it is billed is the
+    # account's setting, applied when pricing (`rates`), so flipping it re-bills
+    # every month not yet issued the way a corrected price does. Days measured
+    # before this column existed hold 0: their split is unknown, and they bill
+    # as they always did.
+    backup_snapshot_gib = models.PositiveIntegerField(default=0)
+
     class Meta:
         db_table = 'usage_snapshots'
         unique_together = ('project_id', 'taken_on')
