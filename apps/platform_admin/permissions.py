@@ -44,6 +44,20 @@ class CanWriteBilling(IsPlatformAdmin):
         return super().has_permission(request, view) and request.user.can_bill
 
 
+class CanWriteOrBill(IsPlatformAdmin):
+    """Operators holding either authority (OWNER, OPS, FINANCE).
+
+    For a switch that is both at once — what a client sees in their cabinet and
+    what they are billed for — so neither role has to ask the other to flip it.
+    SUPPORT still only looks.
+    """
+
+    message = 'This action needs the Owner, Operations or Finance role.'
+
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and (request.user.can_write or request.user.can_bill)
+
+
 class IsPlatformOwner(IsPlatformAdmin):
     """Managing other operators is the Owner's alone."""
 

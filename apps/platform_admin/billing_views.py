@@ -23,6 +23,7 @@ from decimal import Decimal
 
 from rest_framework.response import Response
 
+from apps.accounts import backups
 from apps.billing import invoices as invoice_engine
 from apps.billing import rates as rate_engine
 from apps.billing.models import BillingProfile, Invoice, Resource, Tariff, TariffRate, UsageSnapshot
@@ -321,6 +322,10 @@ class AccountBillingView(PlatformAPIView):
                     'projects': len(projects),
                     'daysMeasured': len({row.taken_on for row in period_rows}),
                     'daysInPeriod': (last - first).days + 1,
+                    # Whether the snapshot line includes scheduled backups. Said
+                    # out loud because a smaller line with no reason given reads
+                    # as a measurement gap.
+                    'countsBackups': backups.counts_backups(domain_id),
                 },
             }
         )
@@ -338,6 +343,7 @@ def _measurement(snapshot: UsageSnapshot) -> dict:
         'unlabelledGiB': snapshot.unlabelled_gib,
         'elasticIps': snapshot.elastic_ips,
         'snapshotGiB': snapshot.snapshot_gib,
+        'backupSnapshotGiB': snapshot.backup_snapshot_gib,
     }
 
 

@@ -4,9 +4,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts import backups
 from apps.authentication import vault
 from apps.common.concurrency import gather
 from apps.common.exceptions import AppError
+from apps.common.tenancy import account_domain
 from apps.integrations.zadara import resources as zadara_resources
 
 
@@ -78,6 +80,9 @@ class SnapshotListView(APIView):
     Volume snapshots copy one volume; machine snapshots copy every volume of a
     VM at one moment. They live in different APIs and have different fields, so
     they are returned as two lists rather than forced into one shape.
+
+    An account set not to count its scheduled backups gets neither list with
+    them in it, and totals that never saw them — see `apps.accounts.backups`.
     """
 
     permission_classes = [IsAuthenticated]
@@ -86,6 +91,9 @@ class SnapshotListView(APIView):
         token = vault.get(request.session.session_key) if request.session.session_key else None
         if not token:
             raise AppError(message='Session expired, please sign in again.', code='session_expired', status_code=401)
+
+        _, domain_id = account_domain(request)
+        with_backups = backups.counts_backups(domain_id)
 
         # Both snapshot kinds and the volumes that name them: three unrelated
         # reads, so one wave instead of three.
@@ -107,6 +115,10 @@ class SnapshotListView(APIView):
 
         if volume_error and vm_error:
             raise AppError(message='Failed to load snapshots', code=volume_error, status_code=502)
+
+        if not with_backups:
+            volume_snapshots = [s for s in volume_snapshots if not backups.is_backup(s)]
+            vm_snapshots = [s for s in vm_snapshots if not backups.is_backup(s)]
 
         # Label each volume snapshot with the volume it came from, where that
         # volume still exists — snapshots outlive their source. A snapshot

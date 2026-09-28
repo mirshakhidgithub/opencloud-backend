@@ -69,3 +69,33 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def is_blocked(self) -> bool:
         return self.status == self.STATUS_BLOCKED
+
+
+class AccountSettings(models.Model):
+    """What the platform decided about one client account — not what the cloud reports.
+
+    Keyed by the cloud's domain id, not the name: a renamed account keeps its
+    settings, and a new account that takes an old name does not inherit them.
+    `account` is only the spelling at the last write, for whoever reads the table.
+
+    A row appears the first time an operator changes something. No row means
+    every default.
+    """
+
+    domain_id = models.CharField(max_length=64, unique=True)
+    account = models.CharField(max_length=255, blank=True, default='')
+
+    # Snapshots a protection group takes on a schedule — backups run for the
+    # client — are counted like any other while this is on. Off hides them from
+    # the client's cabinet and leaves them off the bill; the snapshots the client
+    # takes by hand stay visible and billed either way. See `apps.accounts.backups`.
+    count_backup_snapshots = models.BooleanField(default=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'account_settings'
+
+    def __str__(self):
+        return f'settings of {self.account or self.domain_id}'

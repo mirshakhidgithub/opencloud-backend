@@ -15,6 +15,7 @@ not the collector, is where the account boundary is enforced.
 import logging
 from datetime import date, datetime, timezone
 
+from apps.accounts import backups
 from apps.integrations.zadara import resources as zadara_resources
 from apps.integrations.zadara import service as zadara_service
 from apps.integrations.zadara.exceptions import ZadaraError
@@ -37,6 +38,7 @@ def _blank() -> dict:
         'unlabelled_gib': 0,
         'elastic_ips': 0,
         'snapshot_gib': 0,
+        'backup_snapshot_gib': 0,
     }
 
 
@@ -91,6 +93,11 @@ def measure_cluster(token: str) -> dict[str, dict]:
         entry = bucket(snapshot.get('projectId'))
         if entry is not None:
             entry['snapshot_gib'] += snapshot['sizeGiB']
+            # Measured for every account, not only those set to leave backups
+            # off the bill: the setting is applied when pricing, so it can be
+            # flipped without a day having gone unmeasured.
+            if backups.is_backup(snapshot):
+                entry['backup_snapshot_gib'] += snapshot['sizeGiB']
 
     return buckets
 

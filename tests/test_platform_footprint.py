@@ -41,7 +41,8 @@ VOLUMES = [
 ]
 
 VOLUME_SNAPSHOTS = [
-    {'id': 's-1', 'projectId': 'p-a1', 'sizeGiB': 200},
+    # Taken by a protection group — a scheduled backup.
+    {'id': 's-1', 'projectId': 'p-a1', 'sizeGiB': 200, 'protectionGroupId': 'pg-1'},
     {'id': 's-2', 'projectId': 'p-b1', 'sizeGiB': 30},
 ]
 
@@ -105,6 +106,15 @@ def test_every_kind_of_resource_is_counted_per_account(cluster):
     assert (acme['volumeSnapshotCount'], acme['volumeSnapshotGiB']) == (1, 200)
     assert acme['vmSnapshotCount'] == 1
     assert (acme['publicIps'], acme['vpcCount'], acme['subnetCount'], acme['securityGroupCount']) == (1, 1, 2, 0)
+
+
+def test_the_operator_sees_how_much_of_it_is_backups(cluster):
+    """Whatever the account's setting: deciding not to bill backups needs the figure."""
+    snap = cluster()
+
+    assert (account_of(snap, 'Acme')['backupSnapshotCount'], account_of(snap, 'Acme')['backupSnapshotGiB']) == (1, 200)
+    assert account_of(snap, 'Beta')['backupSnapshotGiB'] == 0
+    assert snap['totals']['backupSnapshotGiB'] == 200
 
 
 def test_one_account_never_carries_another_account_s_resources(cluster):

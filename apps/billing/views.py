@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.audit.models import AuditLog
+from apps.accounts import backups
 from apps.audit.services import record
 from apps.authentication import vault
 from apps.common.concurrency import gather
@@ -69,7 +70,7 @@ def _tariff_payload(tariff: Tariff | None, rates: dict) -> dict:
     }
 
 
-def _live_measurements(token: str, project_id: str) -> tuple[dict, list[str]]:
+def _live_measurements(token: str, project_id: str, *, with_backups: bool = True) -> tuple[dict, list[str]]:
     """Today's shape of ONE project, for the estimate. Each source degrades alone.
 
     Every resource is matched against `project_id` rather than trusted to be in
@@ -77,6 +78,9 @@ def _live_measurements(token: str, project_id: str) -> tuple[dict, list[str]]:
     with wider rights (an MSP role, say) returns the whole cluster, and an
     estimate that quietly priced 155 machines instead of 6 would be worse than
     no estimate at all.
+
+    Without backups, scheduled backups are left out at the source: this shape is
+    shown to the client as well as priced, and they are not to see them.
     """
     values = {
         'vms_total': 0,
@@ -118,7 +122,8 @@ def _live_measurements(token: str, project_id: str) -> tuple[dict, list[str]]:
         values['elastic_ips'] += 1
 
     for snapshot in mine('snapshots'):
-        values['snapshot_gib'] += snapshot['sizeGiB']
+        if with_backups or not backups.is_backup(snapshot):
+            values['snapshot_gib'] += snapshot['sizeGiB']
 
     return values, unavailable
 
@@ -150,7 +155,7 @@ class UserBillingView(APIView):
             )
 
         first, last, label = _period(request.query_params)
-        account = (request.user.account or '').strip()
+        account, domain_id = account_domain(request)
 
         tariff = rate_engine.resolve_tariff(account)
         rates = rate_engine.rate_map(tariff)
@@ -158,7 +163,9 @@ class UserBillingView(APIView):
         snapshots = UsageSnapshot.objects.filter(project_id=project_id, taken_on__gte=first, taken_on__lte=last)
         accrued = rate_engine.cost_of(snapshots, rates)
 
-        measurements, unavailable = _live_measurements(token, project_id)
+        measurements, unavailable = _live_measurements(
+            token, project_id, with_backups=backups.counts_backups(domain_id)
+        )
         estimate = rate_engine.estimate_month(measurements, rates)
 
         return Response(
@@ -199,6 +206,7 @@ class AdminBillingView(APIView):
 
         tariff = rate_engine.resolve_tariff(account)
         rates = rate_engine.rate_map(tariff)
+        with_backups = backups.counts_backups(domain_id)
 
         snapshots = list(
             UsageSnapshot.objects.filter(domain_id=domain_id, taken_on__gte=first, taken_on__lte=last)
@@ -229,7 +237,7 @@ class AdminBillingView(APIView):
                         'hddGiB': latest.hdd_gib,
                         'unlabelledGiB': latest.unlabelled_gib,
                         'elasticIps': latest.elastic_ips,
-                        'snapshotGiB': latest.snapshot_gib,
+                        'snapshotGiB': rate_engine.snapshot_gib(latest, with_backups=with_backups),
                     },
                 }
             )
@@ -281,6 +289,11 @@ class AdminUsageExportView(APIView):
             domain_id=domain_id, taken_on__gte=first, taken_on__lte=last
         ).order_by('taken_on', 'project_name')
 
+        # The export is checked against the bill, so it carries the snapshot
+        # storage the bill counted — and the client does not see backups here
+        # any more than on the page.
+        with_backups = backups.counts_backups(domain_id)
+
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         writer.writerow(
@@ -315,7 +328,7 @@ class AdminUsageExportView(APIView):
                     row.hdd_gib,
                     row.unlabelled_gib,
                     row.elastic_ips,
-                    row.snapshot_gib,
+                    rate_engine.snapshot_gib(row, with_backups=with_backups),
                 ]
             )
 

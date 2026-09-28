@@ -17,6 +17,8 @@ figure travels with the count of days behind it.
 
 from decimal import ROUND_HALF_UP, Decimal
 
+from apps.accounts import backups
+
 from .models import Resource, Tariff, UsageSnapshot
 
 # measurement → billable quantity for one day. RAM is divided by 1024 the way
@@ -52,8 +54,17 @@ def rate_map(tariff: Tariff | None) -> dict[str, Decimal]:
     return {rate.resource: rate.price_per_month for rate in tariff.rates.all() if rate.price_per_month}
 
 
-def quantities(snapshot: UsageSnapshot) -> dict[str, Decimal]:
-    return {resource: measure(snapshot) for resource, measure in QUANTITY.items()}
+def snapshot_gib(snapshot: UsageSnapshot, *, with_backups: bool = True) -> int:
+    """Snapshot storage that counts: all of it, or all but the scheduled backups."""
+    return snapshot.snapshot_gib if with_backups else snapshot.snapshot_gib - snapshot.backup_snapshot_gib
+
+
+def quantities(snapshot: UsageSnapshot, *, with_backups: bool = True) -> dict[str, Decimal]:
+    measured = {resource: measure(snapshot) for resource, measure in QUANTITY.items()}
+    if not with_backups:
+        measured[Resource.SNAPSHOT_GB] = Decimal(snapshot_gib(snapshot, with_backups=False))
+
+    return measured
 
 
 def cost_of(snapshots, rates: dict[str, Decimal]) -> dict:
@@ -67,13 +78,21 @@ def cost_of(snapshots, rates: dict[str, Decimal]) -> dict:
 
     Rounding the average before multiplying is deliberate: the figure shown and
     the figure charged must be the same one, or the columns stop adding up.
+
+    Accounts set not to count their scheduled backups are looked up here rather
+    than passed in by each caller: every screen and the invoice price the same
+    rows the same way, and no caller can forget to ask.
     """
+    snapshots = list(snapshots)
+    without_backups = backups.uncounted(snapshot.domain_id for snapshot in snapshots)
+
     unit_days: dict[str, Decimal] = {}
     days = set()
 
     for snapshot in snapshots:
         days.add(snapshot.taken_on)
-        for resource, quantity in quantities(snapshot).items():
+        with_backups = snapshot.domain_id not in without_backups
+        for resource, quantity in quantities(snapshot, with_backups=with_backups).items():
             if quantity:
                 unit_days[resource] = unit_days.get(resource, Decimal(0)) + quantity
 
