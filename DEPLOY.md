@@ -243,16 +243,88 @@ up on the host, where Postgres lives:
 Keep at least a month, and restore one into a scratch database once — a backup
 nobody has restored is a hypothesis.
 
-## 9. Updating
+## 9. Updating: CI/CD
+
+Nobody deploys by hand any more. All three repositories — this one,
+`opencloud-admin` and `opencloud-frontend` — run the same pipeline
+(`.github/workflows/ci.yml`):
+
+1. **Every pull request:** the tests. Here also `makemigrations --check`.
+2. **Every push to `main`:** the same tests, then the image is built in GitHub
+   Actions (linux/amd64) and pushed to GHCR as `:<commit sha>` and `:prod`, then
+   the host is told to run it.
+
+Building off the host is the point: `next build` wants a couple of gigabytes, and
+this host runs other people's processes.
+
+The host side is one script, `deploy/opencloud-deploy`, bound to the CI's SSH key
+as a forced command. The CI can send it `"<app> <sha>"` and nothing else, so a
+leaked key can redeploy a commit that is already built — not open a shell. It
+checks out that commit (so the compose file matches the image), pulls only our
+image, tags it `:prod`, runs `up -d --no-build`, waits for the health URLs and
+keeps the last three builds. One lock serialises deploys across all three stacks.
+
+The checkouts on this host are `/var/www/opencloud-backend`,
+`/var/www/opencloud-admin` and `/var/www/opencloud-frontend`.
+
+### One-time setup
+
+On your machine, a key for the CI and nothing else:
 
 ```bash
-cd /srv/opencloud/backend   && git pull && docker compose -f docker-compose.prod.yml up -d --build
-cd /srv/opencloud/cabinet-tz && git pull && docker compose -f docker-compose.prod.yml up -d --build
+ssh-keygen -t ed25519 -N '' -C github-actions@opencloud -f opencloud-deploy
+ssh-keyscan -t ed25519 94.158.57.180 > opencloud-known-hosts
+
+# The CI key on the host, allowed to run the deploy script and only that. The
+# $(cat …) expands here, on your machine, where the key file is.
+ssh ubuntu@94.158.57.180 "echo 'command=\"sudo -n /usr/local/bin/opencloud-deploy\",restrict $(cat opencloud-deploy.pub)' >> ~/.ssh/authorized_keys"
 ```
 
-Rolling back is the same command on an earlier commit. A migration that has
-already applied does not roll back with it — check `git log` for new migrations
-before reverting past one.
+On the host, after this repository's CI change is on `main`:
+
+```bash
+# The script, taken from main. It is not updated by deploys — the CI must not be
+# able to rewrite its own gatekeeper — so repeat this when it changes.
+sudo git -C /var/www/opencloud-backend fetch origin
+sudo git -C /var/www/opencloud-backend show origin/main:deploy/opencloud-deploy \
+  | sudo tee /usr/local/bin/opencloud-deploy >/dev/null
+sudo chmod 755 /usr/local/bin/opencloud-deploy
+
+# Pulling from GHCR: a classic personal access token with read:packages only.
+sudo docker login ghcr.io -u mirshakhidgithub
+
+# The script fetches as root; each of these must succeed without a prompt.
+for app in backend admin frontend; do sudo git -C /var/www/opencloud-$app fetch --dry-run; done
+```
+
+In each of the three repositories, Settings → Secrets and variables → Actions:
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_SSH_KEY` | contents of `opencloud-deploy` (the private key) |
+| `DEPLOY_KNOWN_HOSTS` | contents of `opencloud-known-hosts` |
+| `DEPLOY_HOST` | `ubuntu@94.158.57.180` |
+
+With the GitHub CLI: `gh secret set DEPLOY_SSH_KEY -R mirshakhidgithub/<repo> < opencloud-deploy`.
+
+Deploy the backend before the consoles when both change: a console may expect a
+field that only the new API returns. Merging this repository's pull request
+first and waiting for its run is enough.
+
+### Rolling back
+
+The same script with an earlier sha, from a normal session on the host:
+
+```bash
+sudo SSH_ORIGINAL_COMMAND="backend <sha>" /usr/local/bin/opencloud-deploy
+```
+
+A migration that has already applied does not roll back with it — check
+`git log` for new migrations before reverting past one.
+
+Building on the host still works when CI is unavailable:
+`docker compose -f docker-compose.prod.yml up -d --build` produces the same
+`:prod` tag locally.
 
 ## 10. Logs
 

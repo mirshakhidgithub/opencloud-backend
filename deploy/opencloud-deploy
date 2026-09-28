@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# The only thing GitHub Actions may do on the production host.
+#
+# Installed as /usr/local/bin/opencloud-deploy and bound to the CI deploy key as
+# a forced command in ~ubuntu/.ssh/authorized_keys:
+#
+#   command="sudo -n /usr/local/bin/opencloud-deploy",restrict ssh-ed25519 AAAA… github-actions@opencloud
+#
+# Whatever the workflow sends arrives in SSH_ORIGINAL_COMMAND and is parsed here,
+# never executed: "<app> <commit sha>", nothing else. A leaked deploy key can
+# therefore redeploy a commit that is already on GitHub and built — it cannot
+# open a shell, read .env or touch the other applications on this host.
+#
+# Rolling back is the same call with an older sha, from a normal session:
+#
+#   sudo SSH_ORIGINAL_COMMAND="backend <sha>" /usr/local/bin/opencloud-deploy
+
+set -euo pipefail
+
+REGISTRY=ghcr.io/mirshakhidgithub
+KEEP_PREVIOUS=3
+
+die() {
+  echo "opencloud-deploy: $*" >&2
+  exit 1
+}
+
+read -r app sha extra <<<"${SSH_ORIGINAL_COMMAND:-}" || true
+
+[[ -z "${extra:-}" ]] || die 'expected "<app> <sha>" and nothing more'
+[[ "${sha:-}" =~ ^[0-9a-f]{40}$ ]] || die 'the second word must be a full commit sha'
+
+# What to check once the new containers are up. Each URL has to answer 2xx; a
+# port that is open but serving errors is not a finished deploy.
+case "${app:-}" in
+  backend)
+    dir=/var/www/opencloud-backend
+    checks=(http://127.0.0.1:8010/api/v1/health http://127.0.0.1:8020/api/v1/health)
+    ;;
+  admin)
+    dir=/var/www/opencloud-admin
+    checks=(http://127.0.0.1:3020/login)
+    ;;
+  frontend)
+    dir=/var/www/opencloud-frontend
+    checks=(http://127.0.0.1:3010/login)
+    ;;
+  *)
+    die "unknown app '${app:-}' (backend, admin or frontend)"
+    ;;
+esac
+
+image="$REGISTRY/opencloud-$app"
+
+# One deploy at a time across all three stacks: they share a docker network, and
+# the backend's migrations must not run under a frontend that is mid-restart.
+exec 9>/var/lock/opencloud-deploy.lock
+flock -w 900 9 || die 'another deploy is still running'
+
+cd "$dir"
+
+# The compose file travels with the image: checking out the same commit means
+# the service definition and the code it runs can never disagree.
+git fetch --quiet origin
+git cat-file -e "$sha^{commit}" 2>/dev/null || die "commit $sha is not on origin"
+git checkout --quiet -B main "$sha"
+
+# Only our image is pulled. `docker compose pull` would also refresh redis, and a
+# redis restart signs every cabinet user out.
+docker pull --quiet "$image:$sha"
+docker tag "$image:$sha" "$image:prod"
+docker compose -f docker-compose.prod.yml up -d --no-build
+
+for url in "${checks[@]}"; do
+  for attempt in $(seq 1 36); do
+    if curl -fsS -o /dev/null --max-time 5 "$url"; then
+      echo "ok: $url"
+      continue 2
+    fi
+    sleep 5
+  done
+  docker compose -f docker-compose.prod.yml ps >&2
+  die "$url did not come up in 3 minutes — rollback: SSH_ORIGINAL_COMMAND=\"$app <previous sha>\""
+done
+
+# Keep a few previous builds for a quick rollback; drop the rest. Newest first.
+docker images "$image" --format '{{.Tag}}' \
+  | grep -E '^[0-9a-f]{40}$' | grep -vx "$sha" | tail -n +$((KEEP_PREVIOUS + 1)) \
+  | xargs -r -I{} docker rmi "$image:{}" >/dev/null 2>&1 || true
+
+echo "deployed $app at $sha"

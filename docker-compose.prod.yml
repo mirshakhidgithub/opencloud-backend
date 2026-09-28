@@ -3,7 +3,10 @@
 # gateway, and TLS terminates in the host's nginx (see deploy/nginx/).
 #
 #   docker network create opencloud     # once, shared with the frontend compose
-#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Deploys come from CI: GitHub Actions builds the image into GHCR and the host's
+# `opencloud-deploy` pulls it, tags it :prod and runs `up -d --no-build` (see
+# DEPLOY.md §9). `build:` stays so the image can still be built by hand.
 #
 # Configuration lives in .env on the server (template: .env.example).
 
@@ -29,7 +32,7 @@ services:
 
   web:
     build: .
-    image: opencloud-backend:prod
+    image: ghcr.io/mirshakhidgithub/opencloud-backend:prod
     restart: unless-stopped
     env_file: .env
     environment:
@@ -82,7 +85,7 @@ services:
   # request that no longer competes with tenant traffic for the same workers.
   web-admin:
     build: .
-    image: opencloud-backend:prod
+    image: ghcr.io/mirshakhidgithub/opencloud-backend:prod
     restart: unless-stopped
     # The image's own CMD runs `migrate` before gunicorn. `web` is the one that
     # owns the schema; if this container ran it too, both would race for the
@@ -123,7 +126,7 @@ services:
 
   worker:
     build: .
-    image: opencloud-backend:prod
+    image: ghcr.io/mirshakhidgithub/opencloud-backend:prod
     restart: unless-stopped
     command: celery -A config worker -l info --concurrency 2
     env_file: .env
@@ -143,7 +146,7 @@ services:
   # resumes the schedule instead of starting it over.
   beat:
     build: .
-    image: opencloud-backend:prod
+    image: ghcr.io/mirshakhidgithub/opencloud-backend:prod
     restart: unless-stopped
     command: celery -A config beat -l info --schedule /var/lib/celery/celerybeat-schedule --pidfile=
     env_file: .env
